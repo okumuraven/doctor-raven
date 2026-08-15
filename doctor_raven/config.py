@@ -18,6 +18,12 @@ claude_model = "claude-sonnet-5"
 
 [maintenance]
 auto_apply_updates = false
+
+[system_health]
+temp_warn_c = 75
+temp_critical_c = 90
+load_warn_per_core = 0.85
+load_critical_per_core = 1.5
 """
 
 
@@ -28,6 +34,10 @@ class Config:
     claude_model: str
     auto_apply_updates: bool
     anthropic_api_key: str | None
+    temp_warn_c: float
+    temp_critical_c: float
+    load_warn_per_core: float
+    load_critical_per_core: float
 
 
 def _ensure_config_file() -> None:
@@ -44,6 +54,7 @@ def load_config() -> Config:
 
     llm = raw.get("llm", {})
     maintenance = raw.get("maintenance", {})
+    system_health = raw.get("system_health", {})
 
     return Config(
         ollama_host=llm.get("ollama_host", "http://localhost:11434"),
@@ -51,6 +62,10 @@ def load_config() -> Config:
         claude_model=llm.get("claude_model", "claude-sonnet-5"),
         auto_apply_updates=bool(maintenance.get("auto_apply_updates", False)),
         anthropic_api_key=os.environ.get("ANTHROPIC_API_KEY"),
+        temp_warn_c=float(system_health.get("temp_warn_c", 75)),
+        temp_critical_c=float(system_health.get("temp_critical_c", 90)),
+        load_warn_per_core=float(system_health.get("load_warn_per_core", 0.85)),
+        load_critical_per_core=float(system_health.get("load_critical_per_core", 1.5)),
     )
 
 

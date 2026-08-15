@@ -1,19 +1,23 @@
 """Doctor Raven CLI entry point. Wires Typer subcommands to the feature modules."""
 
+from pathlib import Path
+
 import typer
 
 from doctor_raven.config import load_config
 from doctor_raven.core import llm_router
-from doctor_raven.features import briefing, maintenance, reminders, research, schedule
+from doctor_raven.features import briefing, maintenance, reminders, research, schedule, security
 from doctor_raven.util.formatting import console, print_error, print_ok, print_section, print_warn
 
 app = typer.Typer(help="Doctor Raven — a local-first intelligent assistant for daily engineering/security work.")
 task_app = typer.Typer(help="Manage tasks")
 remind_app = typer.Typer(help="Manage reminders")
 research_app = typer.Typer(help="Manage research topics")
+sec_app = typer.Typer(help="Security posture checks and CVE lookups")
 app.add_typer(task_app, name="task")
 app.add_typer(remind_app, name="remind")
 app.add_typer(research_app, name="research")
+app.add_typer(sec_app, name="sec")
 
 
 @app.command()
@@ -148,6 +152,67 @@ def doctor() -> None:
     """Check for missing dependencies (Ollama, rkhunter, lynis, clamav, notify-send) and offer to install them."""
     config = load_config()
     maintenance.run_doctor(config)
+
+
+@sec_app.command("posture")
+def sec_posture() -> None:
+    """Read-only local security posture snapshot: listening ports, firewall, failed logins, recent logins."""
+    print_section("Security posture")
+    for check in security.run_posture_checks():
+        if check.ok is True:
+            print_ok(f"{check.name}: {check.summary}")
+        elif check.ok is False:
+            print_error(f"{check.name}: {check.summary}")
+        else:
+            print_warn(f"{check.name}: {check.summary}")
+
+
+@sec_app.command("cve")
+def sec_cve(ecosystem: str, name: str, version: str) -> None:
+    """Check a single package for known CVEs via OSV.dev. Ecosystem examples: PyPI, npm, Go, crates.io."""
+    try:
+        vulns = security.check_package(ecosystem, name, version)
+    except security.OSVUnavailable as exc:
+        print_error(str(exc))
+        raise typer.Exit(1)
+
+    if not vulns:
+        print_ok(f"No known vulnerabilities for {name}=={version} ({ecosystem})")
+        return
+
+    print_warn(f"{len(vulns)} known vulnerabilit{'y' if len(vulns) == 1 else 'ies'} for {name}=={version}:")
+    for vuln in vulns:
+        summary = vuln.get("summary") or (vuln.get("details") or "")[:200]
+        console.print(f"    {vuln.get('id', '?')}: {summary}", markup=False)
+
+
+@sec_app.command("scan-deps")
+def sec_scan_deps(path: str) -> None:
+    """Scan a requirements.txt or package-lock.json for dependencies with known CVEs (via OSV.dev)."""
+    file_path = Path(path)
+    if not file_path.exists():
+        print_error(f"File not found: {path}")
+        raise typer.Exit(1)
+
+    try:
+        findings = security.scan_dependency_file(file_path)
+    except (ValueError, security.OSVUnavailable) as exc:
+        print_error(str(exc))
+        raise typer.Exit(1)
+
+    if not findings:
+        console.print("No dependencies found to check.")
+        return
+
+    vulnerable = [f for f in findings if f.vulnerable]
+    print_section(f"Dependency scan: {len(findings)} package(s) checked")
+    if not vulnerable:
+        print_ok("No known vulnerabilities found.")
+        return
+
+    print_warn(f"{len(vulnerable)} package(s) with known vulnerabilities:")
+    for finding in vulnerable:
+        console.print(f"    {finding.name}=={finding.version}: {', '.join(finding.vuln_ids)}", markup=False)
 
 
 if __name__ == "__main__":

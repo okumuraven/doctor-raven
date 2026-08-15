@@ -31,6 +31,10 @@ lookback_days = 3
 
 [user]
 name = "okumuraven"
+
+[daemon]
+tick_seconds = 30
+dependency_scan_interval_hours = 6
 """
 
 
@@ -48,6 +52,8 @@ class Config:
     workspace_root: str
     lookback_days: int
     user_name: str
+    daemon_tick_seconds: float
+    daemon_dependency_scan_interval_hours: float
 
 
 def _ensure_config_file() -> None:
@@ -67,6 +73,7 @@ def load_config() -> Config:
     system_health = raw.get("system_health", {})
     research = raw.get("research", {})
     user = raw.get("user", {})
+    daemon = raw.get("daemon", {})
 
     return Config(
         ollama_host=llm.get("ollama_host", "http://localhost:11434"),
@@ -81,6 +88,8 @@ def load_config() -> Config:
         workspace_root=research.get("workspace_root", "~/PROJECTS"),
         lookback_days=int(research.get("lookback_days", 3)),
         user_name=user.get("name", "okumuraven"),
+        daemon_tick_seconds=float(daemon.get("tick_seconds", 30)),
+        daemon_dependency_scan_interval_hours=float(daemon.get("dependency_scan_interval_hours", 6)),
     )
 
 

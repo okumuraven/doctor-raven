@@ -54,6 +54,16 @@ CREATE TABLE IF NOT EXISTS notifications (
     created_at  TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_notifications_created_at ON notifications (created_at);
+
+CREATE TABLE IF NOT EXISTS known_vulnerabilities (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_name  TEXT NOT NULL,
+    package_name  TEXT NOT NULL,
+    version       TEXT NOT NULL,
+    vuln_id       TEXT NOT NULL,
+    first_seen_at TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE (project_name, package_name, version, vuln_id)
+);
 """
 
 

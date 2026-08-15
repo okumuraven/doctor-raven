@@ -45,7 +45,7 @@ def run_morning_briefing(config: Config, force: bool = False) -> None:
     if not due_reminders:
         console.print("  Nothing due right now.")
     for reminder in due_reminders:
-        notifications.notify_and_log("Doctor Raven reminder", reminder.message, source="reminder")
+        notifications.notify_and_log("Doctor Raven reminder", reminder.message, source="reminder", config=config)
         reminders.mark_fired(reminder.id)
         console.print(f"  Fired: {reminder.message}", markup=False)
 
@@ -59,6 +59,7 @@ def run_morning_briefing(config: Config, force: bool = False) -> None:
             "Doctor Raven — heavy task deferred",
             f"Skipped research digest ({decision.reason}). {diagnosis.recommendation}",
             source="system_health",
+            config=config,
         )
         print_warn(f"Skipped research digest — system {decision.level}: {decision.reason}")
         console.print(f"    {diagnosis.recommendation}", markup=False)

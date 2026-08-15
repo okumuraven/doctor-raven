@@ -6,7 +6,8 @@ import typer
 
 from doctor_raven.config import load_config
 from doctor_raven.core import llm_router
-from doctor_raven.features import briefing, maintenance, reminders, research, schedule, security, system_health
+from doctor_raven.features import briefing, git_ops, maintenance, reminders, research, schedule, security, system_health
+from doctor_raven.features import daemon as daemon_feature
 from doctor_raven.util.formatting import console, print_error, print_ok, print_section, print_warn
 
 app = typer.Typer(help="Doctor Raven — a local-first intelligent assistant for daily engineering/security work.")
@@ -14,10 +15,12 @@ task_app = typer.Typer(help="Manage tasks")
 remind_app = typer.Typer(help="Manage reminders")
 research_app = typer.Typer(help="Manage research topics")
 sec_app = typer.Typer(help="Security posture checks and CVE lookups")
+git_app = typer.Typer(help="Git convenience commands with a hard secrets gate — never force-pushes")
 app.add_typer(task_app, name="task")
 app.add_typer(remind_app, name="remind")
 app.add_typer(research_app, name="research")
 app.add_typer(sec_app, name="sec")
+app.add_typer(git_app, name="git")
 
 
 @app.callback(invoke_without_command=True)
@@ -41,6 +44,18 @@ def status() -> None:
     """One-shot status snapshot: system health, tasks, reminders, upgrades, recent notifications."""
     config = load_config()
     briefing.run_status(config)
+
+
+@app.command()
+def daemon() -> None:
+    """Persistent background watcher: near-real-time reminders, system-health transitions, and
+    periodic dependency/CVE scanning across the workspace. Ctrl+C to exit."""
+    config = load_config()
+    try:
+        daemon_feature.run_daemon(config)
+    except daemon_feature.DaemonAlreadyRunning as exc:
+        print_error(str(exc))
+        raise typer.Exit(1)
 
 
 @app.command()
@@ -269,6 +284,88 @@ def doctor() -> None:
     """Check for missing dependencies (Ollama, rkhunter, lynis, clamav, notify-send) and offer to install them."""
     config = load_config()
     maintenance.run_doctor(config)
+
+
+def _print_findings(findings) -> None:
+    for finding in findings:
+        loc = f"{finding.file}:{finding.line}" if finding.line else finding.file
+        console.print(f"    {loc} — {finding.kind}: {finding.preview}", markup=False)
+
+
+@git_app.command("commit")
+def git_commit(
+    message: str = typer.Option(None, "-m", "--message", help="Commit message (skips AI drafting)"),
+) -> None:
+    """Stages everything, hard-blocks on anything secret-shaped, drafts a message via the local
+    LLM if you don't supply one, then commits. Never touches files it can't see are already there."""
+    config = load_config()
+
+    if not git_ops.has_changes():
+        console.print("Nothing to commit.")
+        return
+
+    git_ops.stage_all()
+    files = git_ops.staged_files()
+    print_section("Staged")
+    for f in files:
+        console.print(f"  {f}", markup=False)
+
+    findings = git_ops.scan_staged()
+    if findings:
+        print_error(f"{len(findings)} potential secret(s) found:")
+        _print_findings(findings)
+        if not typer.confirm("Commit anyway despite the above?"):
+            console.print("Nothing committed. Files remain staged — fix the issue and rerun, or `git reset` to unstage.")
+            raise typer.Exit(1)
+
+    commit_message = message
+    if not commit_message:
+        drafted = git_ops.draft_commit_message(config)
+        if drafted:
+            console.print(f"\nDrafted commit message:\n  {drafted}\n", markup=False)
+            if typer.confirm("Use this message?"):
+                commit_message = drafted
+        if not commit_message:
+            commit_message = typer.prompt("Commit message")
+
+    result = git_ops.commit(commit_message)
+    if result.returncode == 0:
+        print_ok(f"Committed: {commit_message.splitlines()[0]}")
+    else:
+        print_error(result.stderr.strip() or "git commit failed")
+        raise typer.Exit(1)
+
+
+@git_app.command("push")
+def git_push() -> None:
+    """Scans outgoing commits for secrets (hard-blocks by default), warns on main/master, then
+    pushes. Never passes --force — full stop."""
+    branch = git_ops.current_branch()
+    if branch in ("main", "master"):
+        print_warn(f"You're pushing directly to '{branch}'.")
+
+    findings, scope_note = git_ops.scan_outgoing()
+    console.print(f"Scanned: {scope_note}", markup=False)
+    if findings:
+        print_error(f"{len(findings)} potential secret(s) found in outgoing commits:")
+        _print_findings(findings)
+        if not typer.confirm("Push anyway despite the above?"):
+            console.print("Push cancelled.")
+            raise typer.Exit(1)
+
+    if git_ops.has_upstream():
+        result = git_ops.push()
+    else:
+        if not typer.confirm(f"No upstream set for '{branch}'. Push and set 'origin/{branch}' as upstream?"):
+            console.print("Push cancelled.")
+            raise typer.Exit(1)
+        result = git_ops.push_set_upstream(branch)
+
+    if result.returncode == 0:
+        print_ok("Pushed.")
+    else:
+        print_error(result.stderr.strip() or "git push failed")
+        raise typer.Exit(1)
 
 
 @sec_app.command("posture")

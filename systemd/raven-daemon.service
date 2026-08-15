@@ -1,0 +1,14 @@
+[Unit]
+Description=Doctor Raven background daemon (reminders, system health, dependency/CVE watch)
+After=graphical-session.target
+
+[Service]
+Type=simple
+Environment=PYTHONUNBUFFERED=1
+EnvironmentFile=-%h/.config/doctor-raven/env
+ExecStart=%h/.local/share/doctor-raven/venv/bin/raven daemon
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=default.target

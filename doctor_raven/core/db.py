@@ -64,6 +64,12 @@ CREATE TABLE IF NOT EXISTS known_vulnerabilities (
     first_seen_at TEXT NOT NULL DEFAULT (datetime('now')),
     UNIQUE (project_name, package_name, version, vuln_id)
 );
+
+CREATE TABLE IF NOT EXISTS auto_commit_projects (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_path TEXT NOT NULL UNIQUE,
+    enabled_at   TEXT NOT NULL DEFAULT (datetime('now'))
+);
 """
 
 

@@ -7,6 +7,7 @@ class FakeConfig:
     temp_critical_c = 90.0
     load_warn_per_core = 0.85
     load_critical_per_core = 1.5
+    git_auto_idle_minutes = 10.0
 
 
 def _patch_health(monkeypatch, level: str, reason: str = "test reason"):
@@ -75,3 +76,53 @@ def test_check_reminders_fires_and_marks_due_reminders(isolated_db, monkeypatch)
 
     assert len(calls) == 1
     assert [r.message for r in reminders.list_reminders()] == ["Not yet"]
+
+
+def test_sweep_auto_commit_skips_disabled_projects(isolated_db, tmp_path, monkeypatch):
+    calls = []
+    monkeypatch.setattr(loop_module.git_ops, "list_enabled", lambda: [])
+    monkeypatch.setattr(loop_module.notifications, "notify_and_log", lambda *a, **k: calls.append(a))
+
+    loop_module._sweep_auto_commit_projects(FakeConfig())
+    assert calls == []
+
+
+def test_sweep_auto_commit_skips_when_not_idle(isolated_db, tmp_path, monkeypatch):
+    project = tmp_path / "proj"
+    project.mkdir()
+    monkeypatch.setattr(loop_module.git_ops, "list_enabled", lambda: [str(project)])
+    monkeypatch.setattr(loop_module.git_ops, "has_changes", lambda p: True)
+    monkeypatch.setattr(loop_module.git_ops, "is_idle", lambda p, minutes: False)
+    calls = []
+    monkeypatch.setattr(loop_module.git_ops, "try_auto_commit", lambda *a, **k: calls.append(a) or "should not run")
+    monkeypatch.setattr(loop_module.notifications, "notify_and_log", lambda *a, **k: calls.append(a))
+
+    loop_module._sweep_auto_commit_projects(FakeConfig())
+    assert calls == []
+
+
+def test_sweep_auto_commit_notifies_on_outcome_when_idle(isolated_db, tmp_path, monkeypatch):
+    project = tmp_path / "proj"
+    project.mkdir()
+    monkeypatch.setattr(loop_module.git_ops, "list_enabled", lambda: [str(project)])
+    monkeypatch.setattr(loop_module.git_ops, "has_changes", lambda p: True)
+    monkeypatch.setattr(loop_module.git_ops, "is_idle", lambda p, minutes: True)
+    monkeypatch.setattr(loop_module.git_ops, "try_auto_commit", lambda p, config: "committed: chore: wip")
+    calls = []
+    monkeypatch.setattr(loop_module.notifications, "notify_and_log", lambda *a, **k: calls.append(a))
+
+    loop_module._sweep_auto_commit_projects(FakeConfig())
+
+    assert len(calls) == 1
+    assert "proj" in calls[0][0]
+    assert calls[0][1] == "committed: chore: wip"
+
+
+def test_sweep_auto_commit_ignores_missing_project_path(isolated_db, tmp_path, monkeypatch):
+    missing = tmp_path / "gone"
+    monkeypatch.setattr(loop_module.git_ops, "list_enabled", lambda: [str(missing)])
+    calls = []
+    monkeypatch.setattr(loop_module.notifications, "notify_and_log", lambda *a, **k: calls.append(a))
+
+    loop_module._sweep_auto_commit_projects(FakeConfig())
+    assert calls == []

@@ -1,12 +1,14 @@
 """Persistent background loop: fires reminders near-real-time, notifies on system-health
-transitions, and periodically scans tracked projects' dependency files for newly-appeared CVEs."""
+transitions, periodically scans tracked projects' dependency files for newly-appeared CVEs,
+and auto-commits (never pushes) any project you've explicitly opted in via `raven git auto enable`."""
 
 import os
 import threading
 import time
+from pathlib import Path
 
 from doctor_raven.config import Config
-from doctor_raven.features import notifications, reminders, security, system_health
+from doctor_raven.features import git_ops, notifications, reminders, security, system_health
 from doctor_raven.features.daemon import pidlock, vuln_tracker
 from doctor_raven.features.research.project_tracker import list_recent_projects
 from doctor_raven.util.formatting import console, print_section
@@ -62,22 +64,44 @@ def _scan_project_dependencies(config: Config) -> None:
                 vuln_tracker.record_seen(project.name, new_pairs)
 
 
+def _sweep_auto_commit_projects(config: Config) -> None:
+    for project_path_str in git_ops.list_enabled():
+        project_path = Path(project_path_str)
+        if not project_path.exists():
+            continue
+        if not git_ops.has_changes(project_path):
+            continue
+        if not git_ops.is_idle(project_path, config.git_auto_idle_minutes):
+            continue
+
+        outcome = git_ops.try_auto_commit(project_path, config)
+        if outcome:
+            notifications.notify_and_log(
+                f"Doctor Raven — auto-commit ({project_path.name})", outcome, source="git_auto", config=config
+            )
+
+
 def run_daemon(config: Config) -> None:
     """Reminders and system health are checked on every tick and must never be delayed by the
-    dependency/CVE scan — that scan does real git + OSV.dev network I/O across every tracked
-    project and can easily take longer than one tick, so it always runs in a background thread,
-    never inline in the loop. scan_lock skips a trigger if the previous scan is still running,
-    rather than piling up overlapping scans."""
+    slower background work (dependency/CVE scanning does real git + OSV.dev network I/O across
+    every tracked project; auto-commit drafts a message via the local LLM), so both always run
+    in their own background thread, never inline in the loop. Each has its own lock that skips
+    a trigger if its previous run is still in flight, rather than piling up overlapping runs."""
     pidlock.acquire()
     console.print(f"Doctor Raven daemon started (pid {os.getpid()}).")
     print_section("Watching")
     console.print(f"  Reminders: every {config.daemon_tick_seconds:.0f}s")
     console.print(f"  System health: every {config.daemon_tick_seconds:.0f}s (on transition only)")
     console.print(f"  Dependency/CVE scan: every {config.daemon_dependency_scan_interval_hours:.1f}h (background thread)")
+    console.print(
+        f"  Auto-commit: opted-in projects only, after {config.git_auto_idle_minutes:.0f}min idle "
+        "(background thread, never pushes)"
+    )
 
     last_health_level: str | None = None
     dependency_scan_interval = config.daemon_dependency_scan_interval_hours * 3600
     scan_lock = threading.Lock()
+    auto_commit_lock = threading.Lock()
 
     def _start_scan_thread() -> None:
         def _worker() -> None:
@@ -85,6 +109,15 @@ def run_daemon(config: Config) -> None:
                 _scan_project_dependencies(config)
             finally:
                 scan_lock.release()
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _start_auto_commit_thread() -> None:
+        def _worker() -> None:
+            try:
+                _sweep_auto_commit_projects(config)
+            finally:
+                auto_commit_lock.release()
 
         threading.Thread(target=_worker, daemon=True).start()
 
@@ -103,6 +136,10 @@ def run_daemon(config: Config) -> None:
                 if scan_lock.acquire(blocking=False):
                     _start_scan_thread()
                 # else: previous scan still running — skip this cycle's trigger
+
+            if auto_commit_lock.acquire(blocking=False):
+                _start_auto_commit_thread()
+            # else: previous sweep still running — skip this tick's trigger
     except KeyboardInterrupt:
         console.print("\nStopping daemon.")
     finally:

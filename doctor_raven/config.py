@@ -35,6 +35,9 @@ name = "okumuraven"
 [daemon]
 tick_seconds = 30
 dependency_scan_interval_hours = 6
+
+[git_auto]
+idle_minutes = 10
 """
 
 
@@ -54,6 +57,7 @@ class Config:
     user_name: str
     daemon_tick_seconds: float
     daemon_dependency_scan_interval_hours: float
+    git_auto_idle_minutes: float
 
 
 def _ensure_config_file() -> None:
@@ -74,6 +78,7 @@ def load_config() -> Config:
     research = raw.get("research", {})
     user = raw.get("user", {})
     daemon = raw.get("daemon", {})
+    git_auto = raw.get("git_auto", {})
 
     return Config(
         ollama_host=llm.get("ollama_host", "http://localhost:11434"),
@@ -90,6 +95,7 @@ def load_config() -> Config:
         user_name=user.get("name", "okumuraven"),
         daemon_tick_seconds=float(daemon.get("tick_seconds", 30)),
         daemon_dependency_scan_interval_hours=float(daemon.get("dependency_scan_interval_hours", 6)),
+        git_auto_idle_minutes=float(git_auto.get("idle_minutes", 10)),
     )
 
 

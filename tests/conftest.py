@@ -5,6 +5,7 @@ import pytest
 
 from doctor_raven.core import db as db_module
 from doctor_raven.features.daemon import vuln_tracker
+from doctor_raven.features.git_ops import registry as git_ops_registry
 from doctor_raven.features.notifications import store as notifications_store
 from doctor_raven.features.reminders import store as reminders_store
 from doctor_raven.features.research import store as research_store
@@ -33,4 +34,5 @@ def isolated_db(tmp_path, monkeypatch):
     monkeypatch.setattr(research_store, "get_conn", fake_get_conn)
     monkeypatch.setattr(notifications_store, "get_conn", fake_get_conn)
     monkeypatch.setattr(vuln_tracker, "get_conn", fake_get_conn)
+    monkeypatch.setattr(git_ops_registry, "get_conn", fake_get_conn)
     return test_db_path

@@ -1,5 +1,6 @@
 """Doctor Raven CLI entry point. Wires Typer subcommands to the feature modules."""
 
+import subprocess
 from pathlib import Path
 
 import typer
@@ -16,11 +17,13 @@ remind_app = typer.Typer(help="Manage reminders")
 research_app = typer.Typer(help="Manage research topics")
 sec_app = typer.Typer(help="Security posture checks and CVE lookups")
 git_app = typer.Typer(help="Git convenience commands with a hard secrets gate — never force-pushes")
+git_auto_app = typer.Typer(help="Per-project opt-in for the daemon's automatic local-commit sweep")
 app.add_typer(task_app, name="task")
 app.add_typer(remind_app, name="remind")
 app.add_typer(research_app, name="research")
 app.add_typer(sec_app, name="sec")
 app.add_typer(git_app, name="git")
+git_app.add_typer(git_auto_app, name="auto")
 
 
 @app.callback(invoke_without_command=True)
@@ -300,6 +303,12 @@ def git_commit(
     LLM if you don't supply one, then commits. Never touches files it can't see are already there."""
     config = load_config()
 
+    if git_ops.is_detached_head():
+        print_warn("You're in detached HEAD — this commit won't be reachable from any branch unless you create one for it.")
+        if not typer.confirm("Commit anyway?"):
+            console.print("Commit cancelled.")
+            raise typer.Exit(1)
+
     if not git_ops.has_changes():
         console.print("Nothing to commit.")
         return
@@ -365,6 +374,145 @@ def git_push() -> None:
         print_ok("Pushed.")
     else:
         print_error(result.stderr.strip() or "git push failed")
+        raise typer.Exit(1)
+
+
+def _repo_root_or_exit() -> Path:
+    result = subprocess.run(["git", "rev-parse", "--show-toplevel"], capture_output=True, text=True)
+    if result.returncode != 0:
+        print_error("Not inside a git repository.")
+        raise typer.Exit(1)
+    return Path(result.stdout.strip()).resolve()
+
+
+@git_auto_app.command("enable")
+def git_auto_enable() -> None:
+    """Opt this project into the daemon's auto-commit sweep: idle uncommitted changes get
+    committed locally with an AI-drafted message, gated by the same secrets scanner. Pushing
+    is never automatic — that's always `raven git push`, on your call."""
+    project_path = _repo_root_or_exit()
+    git_ops.enable(project_path)
+    print_ok(f"Watching over '{project_path.name}' now.")
+    console.print(
+        "  Once things go quiet here, I'll tidy up and commit locally — you'll still push when you're ready.",
+        markup=False,
+    )
+
+
+@git_auto_app.command("disable")
+def git_auto_disable() -> None:
+    """Opt this project back out of the auto-commit sweep."""
+    project_path = _repo_root_or_exit()
+    if git_ops.disable(project_path):
+        print_ok(f"Stepping back from '{project_path.name}' — you've got the wheel.")
+    else:
+        console.print(f"'{project_path.name}' wasn't on my watch list.")
+
+
+@git_auto_app.command("list")
+def git_auto_list() -> None:
+    """Show every project currently opted into the auto-commit sweep."""
+    enabled = git_ops.list_enabled()
+    if not enabled:
+        console.print("Nothing on my watch list yet. Run `raven git auto enable` from inside a project.")
+        return
+    print_section("Watching")
+    for path in enabled:
+        console.print(f"  {Path(path).name}  ({path})", markup=False)
+
+
+@git_app.command("switch")
+def git_switch(
+    branch: str,
+    create: bool = typer.Option(False, "--create", "-c", help="Create the branch if it doesn't exist"),
+) -> None:
+    """Switch branches safely: flags detached HEAD before you leave it behind, warns about
+    unpushed commits on the branch you're leaving, and offers to stash uncommitted changes
+    instead of losing track of them."""
+    if git_ops.is_detached_head():
+        print_warn("You're in detached HEAD. Any commits made here become unreachable once you switch away.")
+        if typer.confirm("Create a branch here first to save this work?"):
+            name = typer.prompt("Branch name")
+            result = git_ops.create_branch(name)
+            if result.returncode != 0:
+                print_error(result.stderr.strip() or "Could not create branch")
+                raise typer.Exit(1)
+            print_ok(f"Created '{name}' at this commit.")
+    else:
+        current = git_ops.current_branch()
+        unpushed = git_ops.unpushed_commit_count()
+        if unpushed:
+            print_warn(f"'{current}' has {unpushed} unpushed commit(s) — don't forget to push before you're done here.")
+
+        if git_ops.has_changes():
+            print_warn("You have uncommitted changes.")
+            if typer.confirm("Stash them before switching?"):
+                stash_result = git_ops.stash_push(f"auto-stash before switching to {branch}")
+                if stash_result.returncode != 0:
+                    print_error(stash_result.stderr.strip() or "Stash failed")
+                    raise typer.Exit(1)
+                print_ok("Stashed.")
+            elif not typer.confirm("Switch anyway?"):
+                console.print("Switch cancelled.")
+                raise typer.Exit(1)
+
+    if create and not git_ops.branch_exists(branch):
+        result = git_ops.create_branch(branch)
+    else:
+        result = git_ops.switch_branch(branch)
+        if result.returncode != 0 and not git_ops.branch_exists(branch):
+            remote_result = git_ops.checkout_remote_tracking(branch)
+            if remote_result.returncode == 0:
+                print_ok(f"No local branch '{branch}' — checked out and tracking 'origin/{branch}'.")
+                return
+            result = remote_result
+
+    if result.returncode == 0:
+        print_ok(f"Switched to '{branch}'.")
+    else:
+        print_error(result.stderr.strip() or "git checkout failed")
+        raise typer.Exit(1)
+
+
+@git_app.command("branch")
+def git_branch_new(name: str) -> None:
+    """Create a new branch from HEAD and switch to it, with a name-collision check."""
+    if git_ops.branch_exists(name):
+        print_error(f"Branch '{name}' already exists.")
+        raise typer.Exit(1)
+    result = git_ops.create_branch(name)
+    if result.returncode == 0:
+        print_ok(f"Created and switched to '{name}'.")
+    else:
+        print_error(result.stderr.strip() or "git checkout -b failed")
+        raise typer.Exit(1)
+
+
+@git_app.command("stash")
+def git_stash(message: str = typer.Option(None, "-m", "--message", help="Optional stash message")) -> None:
+    """Stash uncommitted changes as a quick checkpoint you can restore with `raven git stash-pop`."""
+    if not git_ops.has_changes():
+        console.print("Nothing to stash.")
+        return
+    result = git_ops.stash_push(message)
+    if result.returncode == 0:
+        print_ok("Stashed.")
+    else:
+        print_error(result.stderr.strip() or "git stash failed")
+        raise typer.Exit(1)
+
+
+@git_app.command("stash-pop")
+def git_stash_pop() -> None:
+    """Restore the most recently stashed changes."""
+    if not git_ops.stash_list():
+        console.print("No stash to pop.")
+        return
+    result = git_ops.stash_pop()
+    if result.returncode == 0:
+        print_ok("Restored.")
+    else:
+        print_error(result.stderr.strip() or "git stash pop failed (check `git status` — likely a conflict)")
         raise typer.Exit(1)
 
 

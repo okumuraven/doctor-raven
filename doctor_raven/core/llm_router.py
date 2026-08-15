@@ -18,10 +18,15 @@ class NoLLMAvailable(RuntimeError):
 
 
 def complete(config: Config, prompt: str, *, deep: bool = False, system: str | None = None) -> str:
+    """Raises NoLLMAvailable on any failure — deep, fallback, or local — so callers only
+    ever need to handle one exception type regardless of which path was taken."""
     system = system or DEFAULT_PERSONA_PROMPT
 
     if deep:
-        return claude_client.complete(config.anthropic_api_key, config.claude_model, prompt, system=system)
+        try:
+            return claude_client.complete(config.anthropic_api_key, config.claude_model, prompt, system=system)
+        except claude_client.ClaudeUnavailable as exc:
+            raise NoLLMAvailable(str(exc)) from exc
 
     try:
         return ollama_client.complete(config.ollama_host, config.ollama_model, prompt, system=system)
@@ -31,4 +36,7 @@ def complete(config: Config, prompt: str, *, deep: bool = False, system: str | N
                 f"Local Ollama is unavailable ({ollama_exc}) and no ANTHROPIC_API_KEY is set as a fallback. "
                 "Run `raven doctor` to check/install Ollama, or export ANTHROPIC_API_KEY."
             ) from ollama_exc
-        return claude_client.complete(config.anthropic_api_key, config.claude_model, prompt, system=system)
+        try:
+            return claude_client.complete(config.anthropic_api_key, config.claude_model, prompt, system=system)
+        except claude_client.ClaudeUnavailable as claude_exc:
+            raise NoLLMAvailable(str(claude_exc)) from claude_exc

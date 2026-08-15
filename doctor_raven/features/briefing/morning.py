@@ -5,7 +5,7 @@ from datetime import date
 from doctor_raven.config import Config
 from doctor_raven.core.db import get_conn
 from doctor_raven.core.llm_router import NoLLMAvailable
-from doctor_raven.features import maintenance, reminders, research, schedule
+from doctor_raven.features import maintenance, notifications, reminders, research, schedule, system_health
 from doctor_raven.util.formatting import console, print_section, print_warn
 from rich.markup import escape
 
@@ -43,22 +43,38 @@ def run_morning_briefing(config: Config, force: bool = False) -> None:
     if not due_reminders:
         console.print("  Nothing due right now.")
     for reminder in due_reminders:
-        reminders.notify("Doctor Raven reminder", reminder.message)
+        notifications.notify_and_log("Doctor Raven reminder", reminder.message, source="reminder")
         reminders.mark_fired(reminder.id)
         console.print(f"  Fired: {reminder.message}", markup=False)
 
     print_section("Brainstorm / research digest")
     topics = research.list_topics()
-    if not topics:
-        console.print("  No active research topics. Add one with `raven research add <topic>`.")
+    health_status = system_health.read_status()
+    decision = system_health.evaluate(health_status, config)
+    if decision.level in ("hot", "critical"):
+        diagnosis = system_health.diagnose(health_status)
+        notifications.notify_and_log(
+            "Doctor Raven — heavy task deferred",
+            f"Skipped research digest ({decision.reason}). {diagnosis.recommendation}",
+            source="system_health",
+        )
+        print_warn(f"Skipped research digest — system {decision.level}: {decision.reason}")
+        console.print(f"    {diagnosis.recommendation}", markup=False)
     else:
         try:
-            digests = research.brainstorm_all(config, topics)
-            for name, text in digests.items():
-                console.print(f"  [bold]{escape(name)}[/bold]:")
-                console.print("    " + text.replace("\n", "\n    "), markup=False)
+            digest = research.daily_digest(config, topics)
         except NoLLMAvailable as exc:
             print_warn(str(exc))
+        else:
+            if digest.project_context:
+                top = digest.project_context[0]
+                console.print(f"  [bold]Currently on:[/bold] {escape(top.name)} ({escape(top.branch)})")
+            console.print("  " + digest.synthesis.replace("\n", "\n  "), markup=False)
+            if not topics:
+                console.print("  No active research topics. Add one with `raven research add <topic>`.")
+            for name, text in digest.topic_brainstorms.items():
+                console.print(f"  [bold]{escape(name)}[/bold]:")
+                console.print("    " + text.replace("\n", "\n    "), markup=False)
 
     print_section("Maintenance status")
     try:

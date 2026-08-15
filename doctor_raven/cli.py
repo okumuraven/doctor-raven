@@ -6,7 +6,7 @@ import typer
 
 from doctor_raven.config import load_config
 from doctor_raven.core import llm_router
-from doctor_raven.features import briefing, maintenance, reminders, research, schedule, security
+from doctor_raven.features import briefing, maintenance, reminders, research, schedule, security, system_health
 from doctor_raven.util.formatting import console, print_error, print_ok, print_section, print_warn
 
 app = typer.Typer(help="Doctor Raven — a local-first intelligent assistant for daily engineering/security work.")
@@ -25,6 +25,22 @@ def morning(force: bool = typer.Option(False, "--force", help="Rerun even if alr
     """Run the daily morning briefing: schedule, reminders, brainstorm, maintenance status."""
     config = load_config()
     briefing.run_morning_briefing(config, force=force)
+
+
+@app.command()
+def status() -> None:
+    """One-shot status snapshot: system health, tasks, reminders, upgrades, recent notifications."""
+    config = load_config()
+    briefing.run_status(config)
+
+
+@app.command()
+def dashboard(
+    refresh_seconds: float = typer.Option(3.0, "--refresh", help="Seconds between refreshes"),
+) -> None:
+    """Live-updating status panel. Suppresses redundant notify-send popups while open. Ctrl+C to exit."""
+    config = load_config()
+    briefing.run_dashboard(config, refresh_seconds=refresh_seconds)
 
 
 @task_app.command("add")
@@ -96,12 +112,99 @@ def research_list() -> None:
         console.print(f"#{topic.id} {topic.name}{desc}", markup=False)
 
 
+@research_app.command("digest")
+def research_digest(
+    deep: bool = typer.Option(False, "--deep", help="Use the Claude API instead of the local model"),
+) -> None:
+    """Project activity + trending tech + newly actively-exploited CVEs, synthesized by the LLM."""
+    config = load_config()
+    if not _guard_or_confirm(config, "the research digest"):
+        console.print("Skipped.")
+        raise typer.Exit(0)
+
+    digest = research.daily_digest(config, research.list_topics(), deep=deep)
+
+    print_section("Recent project activity")
+    if not digest.project_context:
+        console.print("  No recent git activity detected in the workspace.")
+    for project in digest.project_context:
+        console.print(f'  {project.name} ({project.branch}): "{project.last_commit_message}" at {project.last_commit_at}', markup=False)
+
+    print_section("Trending tech")
+    if not digest.tech_stories:
+        console.print("  (none fetched)")
+    for story in digest.tech_stories:
+        console.print(f"  {story.points:>4} pts  {story.title}", markup=False)
+
+    print_section("Newly exploited CVEs (CISA KEV)")
+    if not digest.kev_entries:
+        console.print("  (none added recently)")
+    for entry in digest.kev_entries:
+        console.print(f"  {entry.cve_id}: {entry.name} ({entry.vendor} {entry.product}), added {entry.date_added}", markup=False)
+
+    print_section("Synthesis")
+    console.print("  " + digest.synthesis.replace("\n", "\n  "), markup=False)
+
+    if digest.topic_brainstorms:
+        print_section("Saved topics")
+        for name, text in digest.topic_brainstorms.items():
+            console.print(f"  [bold]{name}[/bold]:", markup=True)
+            console.print("    " + text.replace("\n", "\n    "), markup=False)
+
+
+def _guard_or_confirm(config, task_label: str) -> bool:
+    """Warns + diagnoses the cause before a CPU-heavy task, then lets the caller decide."""
+    status = system_health.read_status()
+    decision = system_health.evaluate(status, config)
+    if decision.level == "normal":
+        return True
+
+    diagnosis = system_health.diagnose(status)
+    printer = print_warn if decision.level == "hot" else print_error
+    printer(f"System is {decision.level}: {decision.reason}")
+    for proc in diagnosis.top_processes[:3]:
+        console.print(f"    {proc.cpu_percent:5.1f}%  {proc.name} (pid {proc.pid})", markup=False)
+    console.print(f"  {diagnosis.recommendation}", markup=False)
+    return typer.confirm(f"Proceed with {task_label} anyway?")
+
+
+@app.command()
+def health() -> None:
+    """Show current CPU temperature/load and, if elevated, what's actually driving it."""
+    config = load_config()
+    status = system_health.read_status()
+    decision = system_health.evaluate(status, config)
+
+    temp_str = f"{status.cpu_temp_c:.0f}°C" if status.cpu_temp_c is not None else "unavailable"
+    console.print(
+        f"CPU temp: {temp_str}  |  load: {status.load_1m:.2f} "
+        f"({status.load_per_core:.2f}/core, {status.core_count} cores)",
+        markup=False,
+    )
+
+    if decision.level == "normal":
+        print_ok(f"System status normal ({decision.reason})")
+        return
+
+    printer = print_warn if decision.level == "hot" else print_error
+    printer(f"System status {decision.level}: {decision.reason}")
+
+    diagnosis = system_health.diagnose(status)
+    console.print("  Top processes:", markup=False)
+    for proc in diagnosis.top_processes:
+        console.print(f"    {proc.cpu_percent:5.1f}%  {proc.name} (pid {proc.pid})", markup=False)
+    console.print(f"  Recommendation: {diagnosis.recommendation}", markup=False)
+
+
 @app.command()
 def ask(
     question: str,
     deep: bool = typer.Option(False, "--deep", help="Use the Claude API instead of the local model"),
 ) -> None:
     config = load_config()
+    if not deep and not _guard_or_confirm(config, "this local model request"):
+        console.print("Skipped.")
+        raise typer.Exit(0)
     try:
         console.print(llm_router.complete(config, question, deep=deep), markup=False)
     except llm_router.NoLLMAvailable as exc:
@@ -116,6 +219,7 @@ def maintain(
     ),
     scan: bool = typer.Option(True, "--scan/--no-scan", help="Run security scans (rkhunter/lynis/clamscan)"),
 ) -> None:
+    config = load_config()
     print_section("Package updates")
     status = maintenance.list_upgradable()
     console.print(f"  {status.upgradable_count} package(s) upgradable")
@@ -135,6 +239,10 @@ def maintain(
                     print_error(f"Upgrade failed: {apply_output[-500:]}")
         else:
             console.print("  Skipped applying upgrades.")
+
+    if scan and not _guard_or_confirm(config, "the security scan"):
+        console.print("Skipped security scan.")
+        scan = False
 
     if scan:
         print_section("Security scan")

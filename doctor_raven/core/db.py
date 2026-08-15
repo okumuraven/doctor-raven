@@ -45,6 +45,15 @@ CREATE TABLE IF NOT EXISTS briefing_runs (
     run_date    TEXT NOT NULL UNIQUE,
     created_at  TEXT NOT NULL DEFAULT (datetime('now'))
 );
+
+CREATE TABLE IF NOT EXISTS notifications (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    title       TEXT NOT NULL,
+    message     TEXT NOT NULL,
+    source      TEXT NOT NULL,
+    created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_notifications_created_at ON notifications (created_at);
 """
 
 

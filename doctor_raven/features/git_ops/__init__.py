@@ -1,4 +1,5 @@
 from doctor_raven.features.git_ops.auto_commit import is_idle, try_auto_commit
+from doctor_raven.features.git_ops.hygiene_scanner import HygieneFinding
 from doctor_raven.features.git_ops.models import SecretFinding
 from doctor_raven.features.git_ops.registry import disable, enable, is_enabled, list_enabled
 from doctor_raven.features.git_ops.repo_ops import (
@@ -8,13 +9,16 @@ from doctor_raven.features.git_ops.repo_ops import (
     create_branch,
     current_branch,
     draft_commit_message,
+    gitignore_status,
     has_changes,
     has_upstream,
     is_detached_head,
     push,
     push_set_upstream,
+    repo_root,
     scan_outgoing,
     scan_staged,
+    scan_staged_hygiene,
     stage_all,
     staged_files,
     stash_list,
@@ -25,6 +29,7 @@ from doctor_raven.features.git_ops.repo_ops import (
 )
 
 __all__ = [
+    "HygieneFinding",
     "SecretFinding",
     "branch_exists",
     "checkout_remote_tracking",
@@ -34,6 +39,7 @@ __all__ = [
     "disable",
     "draft_commit_message",
     "enable",
+    "gitignore_status",
     "has_changes",
     "has_upstream",
     "is_detached_head",
@@ -42,8 +48,10 @@ __all__ = [
     "list_enabled",
     "push",
     "push_set_upstream",
+    "repo_root",
     "scan_outgoing",
     "scan_staged",
+    "scan_staged_hygiene",
     "stage_all",
     "staged_files",
     "stash_list",

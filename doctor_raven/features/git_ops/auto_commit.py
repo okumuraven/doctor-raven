@@ -56,9 +56,16 @@ def try_auto_commit(project_path: Path, config: Config) -> str | None:
         kinds = ", ".join(sorted({f.kind for f in findings}))
         return f"held off committing — found potential secret(s) ({kinds}); review with `raven git commit`"
 
+    hygiene_findings = repo_ops.scan_staged_hygiene(project_path)
+
     message = repo_ops.draft_commit_message(config, project_path) or "chore: automatic checkpoint (Doctor Raven)"
     result = repo_ops.commit(message, project_path)
     if result.returncode != 0:
         return f"commit failed: {result.stderr.strip()[:200]}"
 
-    return f"committed: {message.splitlines()[0]}"
+    outcome = f"committed: {message.splitlines()[0]}"
+    if hygiene_findings:
+        # Informational, not blocking — nobody's here to confirm, and a stray build artifact
+        # isn't a security risk, just worth a nudge to fix your .gitignore.
+        outcome += f" (note: {len(hygiene_findings)} file(s) included that probably shouldn't be tracked — check your .gitignore)"
+    return outcome

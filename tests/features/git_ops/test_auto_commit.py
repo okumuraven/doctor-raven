@@ -94,6 +94,24 @@ def test_try_auto_commit_commits_clean_changes_with_llm_message(tmp_path, monkey
     assert "feat: add app.py" in log.stdout
 
 
+def test_try_auto_commit_notes_hygiene_issues_without_blocking(tmp_path, monkeypatch):
+    """Hygiene findings (build artifacts) are informational only in the unattended path — no
+    one's there to confirm, and it's not a security risk, just worth a nudge in the message."""
+    _init_repo(tmp_path)
+    pycache = tmp_path / "__pycache__"
+    pycache.mkdir()
+    (pycache / "mod.cpython-313.pyc").write_bytes(b"x")
+
+    monkeypatch.setattr(llm_router, "complete", lambda *a, **k: "chore: wip")
+
+    outcome = auto_commit.try_auto_commit(tmp_path, FakeConfig())
+
+    assert outcome is not None and outcome.startswith("committed: chore: wip")
+    assert "probably shouldn't be tracked" in outcome
+    log = subprocess.run(["git", "log", "--oneline"], cwd=tmp_path, capture_output=True, text=True)
+    assert "chore: wip" in log.stdout  # committed anyway, not blocked
+
+
 def test_try_auto_commit_falls_back_to_generic_message_when_llm_unavailable(tmp_path, monkeypatch):
     _init_repo(tmp_path)
     (tmp_path / "app.py").write_text("print('hi')\n")

@@ -42,17 +42,36 @@ def _ensure_voice_downloaded(voice_name: str) -> Path:
     return model_path
 
 
+def _clear_cached_voice_files(voice_name: str) -> None:
+    voices_dir = _voices_dir()
+    (voices_dir / f"{voice_name}.onnx").unlink(missing_ok=True)
+    (voices_dir / f"{voice_name}.onnx.json").unlink(missing_ok=True)
+
+
 def _get_voice(voice_name: str):
     if voice_name not in _voice_cache:
         try:
             from piper import PiperVoice
         except ImportError as exc:
             raise SpeechError("piper-tts isn't installed — needed for spoken responses.") from exc
+
         model_path = _ensure_voice_downloaded(voice_name)
         try:
             _voice_cache[voice_name] = PiperVoice.load(model_path)
-        except Exception as exc:
-            raise SpeechError(f"Couldn't load Piper voice '{voice_name}': {exc}") from exc
+        except Exception as first_exc:
+            # Piper's own downloader only checks file existence + non-zero size, not actual
+            # completeness — a truncated .onnx from an interrupted download (killed process,
+            # dropped connection) would otherwise fail to load the same way forever. Clear the
+            # cache and retry once before giving up, so it self-heals instead of requiring
+            # manual cache cleanup.
+            _clear_cached_voice_files(voice_name)
+            model_path = _ensure_voice_downloaded(voice_name)
+            try:
+                _voice_cache[voice_name] = PiperVoice.load(model_path)
+            except Exception as exc:
+                raise SpeechError(
+                    f"Couldn't load Piper voice '{voice_name}' even after clearing the cache and retrying: {exc}"
+                ) from exc
     return _voice_cache[voice_name]
 
 

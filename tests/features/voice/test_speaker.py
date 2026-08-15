@@ -127,6 +127,67 @@ def test_speak_synthesizes_and_plays_then_cleans_up_temp_file(monkeypatch, tmp_p
     assert not __import__("pathlib").Path(wav_arg).exists()  # temp wav cleaned up after playback
 
 
+def test_get_voice_self_heals_a_corrupted_cached_model(monkeypatch, tmp_path):
+    """Regression test: loading a truncated/corrupted cached .onnx (e.g. from an interrupted
+    prior download) should clear the cache and successfully retry, not fail forever."""
+    monkeypatch.setattr(speaker, "ensure_data_dir", lambda: tmp_path)
+    voices_dir = tmp_path / "voices"
+    voices_dir.mkdir()
+    (voices_dir / "en_US-lessac-medium.onnx").write_bytes(b"corrupted, not a real onnx model")
+    (voices_dir / "en_US-lessac-medium.onnx.json").write_bytes(b"{}")
+
+    download_calls = _install_fake_download_voices(
+        monkeypatch, side_effect=lambda voice, download_dir: (download_dir / f"{voice}.onnx.json").write_bytes(b"{}")
+    )
+
+    attempts = {"count": 0}
+
+    class FlakyOnceVoice:
+        @classmethod
+        def load(cls, model_path):
+            attempts["count"] += 1
+            if attempts["count"] == 1:
+                raise RuntimeError("INVALID_PROTOBUF: Protobuf parsing failed")
+            return cls()
+
+        def synthesize_wav(self, text, wav_file):
+            pass
+
+    fake_piper_module = types.ModuleType("piper")
+    fake_piper_module.PiperVoice = FlakyOnceVoice
+    monkeypatch.setitem(sys.modules, "piper", fake_piper_module)
+
+    result = speaker._get_voice("en_US-lessac-medium")
+
+    assert attempts["count"] == 2
+    assert isinstance(result, FlakyOnceVoice)
+    assert download_calls == [("en_US-lessac-medium", voices_dir)]  # re-downloaded after the clear
+
+
+def test_get_voice_raises_when_still_broken_after_retry(monkeypatch, tmp_path):
+    monkeypatch.setattr(speaker, "ensure_data_dir", lambda: tmp_path)
+    voices_dir = tmp_path / "voices"
+    voices_dir.mkdir()
+    (voices_dir / "en_US-lessac-medium.onnx").write_bytes(b"corrupted")
+    (voices_dir / "en_US-lessac-medium.onnx.json").write_bytes(b"{}")
+
+    _install_fake_download_voices(
+        monkeypatch, side_effect=lambda voice, download_dir: (download_dir / f"{voice}.onnx.json").write_bytes(b"{}")
+    )
+
+    class AlwaysBrokenVoice:
+        @classmethod
+        def load(cls, model_path):
+            raise RuntimeError("still broken")
+
+    fake_piper_module = types.ModuleType("piper")
+    fake_piper_module.PiperVoice = AlwaysBrokenVoice
+    monkeypatch.setitem(sys.modules, "piper", fake_piper_module)
+
+    with pytest.raises(speaker.SpeechError, match="even after clearing the cache"):
+        speaker._get_voice("en_US-lessac-medium")
+
+
 def test_speak_reuses_cached_voice_across_calls(monkeypatch, tmp_path):
     monkeypatch.setattr(speaker.shutil, "which", lambda name: "/usr/bin/aplay")
     monkeypatch.setattr(speaker, "ensure_data_dir", lambda: tmp_path)

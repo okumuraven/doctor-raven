@@ -12,6 +12,9 @@ from pathlib import Path
 
 from doctor_raven.config import Config
 from doctor_raven.core import llm_router
+from doctor_raven.features.git_ops.hygiene_scanner import HygieneFinding
+from doctor_raven.features.git_ops.hygiene_scanner import gitignore_warning as _gitignore_warning
+from doctor_raven.features.git_ops.hygiene_scanner import scan_staged_filenames as _scan_hygiene_filenames
 from doctor_raven.features.git_ops.models import SecretFinding
 from doctor_raven.features.git_ops.secret_scanner import scan_diff, scan_filenames
 
@@ -44,6 +47,22 @@ def staged_files(cwd: Path | None = None) -> list[str]:
 def scan_staged(cwd: Path | None = None) -> list[SecretFinding]:
     diff_text = _run(["git", "diff", "--cached"], cwd).stdout
     return scan_diff(diff_text) + scan_filenames(staged_files(cwd))
+
+
+def repo_root(cwd: Path | None = None) -> Path | None:
+    result = _run(["git", "rev-parse", "--show-toplevel"], cwd)
+    if result.returncode != 0:
+        return None
+    return Path(result.stdout.strip()).resolve()
+
+
+def scan_staged_hygiene(cwd: Path | None = None) -> list[HygieneFinding]:
+    return _scan_hygiene_filenames(staged_files(cwd))
+
+
+def gitignore_status(cwd: Path | None = None) -> str | None:
+    root = repo_root(cwd)
+    return _gitignore_warning(root) if root else None
 
 
 def draft_commit_message(config: Config, cwd: Path | None = None) -> str:

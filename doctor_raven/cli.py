@@ -1,6 +1,5 @@
 """Doctor Raven CLI entry point. Wires Typer subcommands to the feature modules."""
 
-import subprocess
 from pathlib import Path
 
 import typer
@@ -331,6 +330,18 @@ def git_commit(
             console.print("Nothing committed. Files remain staged — fix the issue and rerun, or `git reset` to unstage.")
             raise typer.Exit(1)
 
+    hygiene_findings = git_ops.scan_staged_hygiene()
+    gitignore_note = git_ops.gitignore_status()
+    if hygiene_findings or gitignore_note:
+        print_warn("Repo hygiene check — probably shouldn't be tracked:")
+        if gitignore_note:
+            console.print(f"    {gitignore_note}", markup=False)
+        for finding in hygiene_findings:
+            console.print(f"    {finding.file} — {finding.reason}", markup=False)
+        if not typer.confirm("Commit anyway?"):
+            console.print("Nothing committed. Fix your .gitignore and rerun, or `git reset` to unstage.")
+            raise typer.Exit(1)
+
     commit_message = message
     if not commit_message:
         drafted = git_ops.draft_commit_message(config)
@@ -382,11 +393,11 @@ def git_push() -> None:
 
 
 def _repo_root_or_exit() -> Path:
-    result = subprocess.run(["git", "rev-parse", "--show-toplevel"], capture_output=True, text=True)
-    if result.returncode != 0:
+    root = git_ops.repo_root()
+    if root is None:
         print_error("Not inside a git repository.")
         raise typer.Exit(1)
-    return Path(result.stdout.strip()).resolve()
+    return root
 
 
 @git_auto_app.command("enable")

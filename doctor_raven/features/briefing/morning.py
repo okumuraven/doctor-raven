@@ -6,6 +6,7 @@ from doctor_raven.config import Config
 from doctor_raven.core.db import get_conn
 from doctor_raven.core.llm_router import NoLLMAvailable
 from doctor_raven.features import maintenance, notifications, reminders, research, schedule, system_health
+from doctor_raven.features.briefing.banner import print_banner
 from doctor_raven.util.formatting import console, print_section, print_warn
 from rich.markup import escape
 
@@ -28,6 +29,7 @@ def run_morning_briefing(config: Config, force: bool = False) -> None:
         console.print("Already ran today's briefing. Use --force to rerun.")
         return
 
+    print_banner(config)
     console.rule("[bold]Doctor Raven — Morning Briefing[/bold]")
 
     print_section("Today's tasks")

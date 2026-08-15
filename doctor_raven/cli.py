@@ -20,6 +20,15 @@ app.add_typer(research_app, name="research")
 app.add_typer(sec_app, name="sec")
 
 
+@app.callback(invoke_without_command=True)
+def main(ctx: typer.Context) -> None:
+    if ctx.invoked_subcommand is None:
+        config = load_config()
+        briefing.print_banner(config)
+        console.print(ctx.get_help())
+        raise typer.Exit()
+
+
 @app.command()
 def morning(force: bool = typer.Option(False, "--force", help="Rerun even if already run today")) -> None:
     """Run the daily morning briefing: schedule, reminders, brainstorm, maintenance status."""

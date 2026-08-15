@@ -28,6 +28,9 @@ load_critical_per_core = 1.5
 [research]
 workspace_root = "~/PROJECTS"
 lookback_days = 3
+
+[user]
+name = "okumuraven"
 """
 
 
@@ -44,6 +47,7 @@ class Config:
     load_critical_per_core: float
     workspace_root: str
     lookback_days: int
+    user_name: str
 
 
 def _ensure_config_file() -> None:
@@ -62,6 +66,7 @@ def load_config() -> Config:
     maintenance = raw.get("maintenance", {})
     system_health = raw.get("system_health", {})
     research = raw.get("research", {})
+    user = raw.get("user", {})
 
     return Config(
         ollama_host=llm.get("ollama_host", "http://localhost:11434"),
@@ -75,6 +80,7 @@ def load_config() -> Config:
         load_critical_per_core=float(system_health.get("load_critical_per_core", 1.5)),
         workspace_root=research.get("workspace_root", "~/PROJECTS"),
         lookback_days=int(research.get("lookback_days", 3)),
+        user_name=user.get("name", "okumuraven"),
     )
 
 

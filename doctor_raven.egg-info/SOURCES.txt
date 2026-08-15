@@ -14,6 +14,7 @@ doctor_raven/core/db.py
 doctor_raven/core/llm_router.py
 doctor_raven/features/__init__.py
 doctor_raven/features/briefing/__init__.py
+doctor_raven/features/briefing/banner.py
 doctor_raven/features/briefing/dashboard.py
 doctor_raven/features/briefing/morning.py
 doctor_raven/features/maintenance/__init__.py

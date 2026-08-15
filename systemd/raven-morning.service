@@ -1,0 +1,12 @@
+[Unit]
+Description=Doctor Raven morning briefing
+After=graphical-session.target
+
+[Service]
+Type=oneshot
+Environment=PYTHONUNBUFFERED=1
+EnvironmentFile=-%h/.config/doctor-raven/env
+ExecStart=%h/.local/share/doctor-raven/venv/bin/raven morning
+
+[Install]
+WantedBy=default.target

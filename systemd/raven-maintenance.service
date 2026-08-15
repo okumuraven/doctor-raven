@@ -1,0 +1,8 @@
+[Unit]
+Description=Doctor Raven maintenance (update check + security scan, report only)
+
+[Service]
+Type=oneshot
+Environment=PYTHONUNBUFFERED=1
+EnvironmentFile=-%h/.config/doctor-raven/env
+ExecStart=%h/.local/share/doctor-raven/venv/bin/raven maintain

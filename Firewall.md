@@ -1,8 +1,8 @@
-# Firewalls, and Doctor Raven's planned role with them
+# Firewalls, and Doctor Raven's role with them
 
-This doc explains what a firewall actually is, and what Doctor Raven will (and won't) do once
-firewall management is added. **Status: design doc — not yet implemented.** See the `raven fw`
-plan discussed in-repo before this lands as code.
+This doc explains what a firewall actually is, and what Doctor Raven does (and doesn't do) with
+one. **Status: implemented** — see `doctor_raven/features/firewall/` and the `raven fw` command
+group below.
 
 ## 1. What a firewall actually is
 
@@ -39,14 +39,16 @@ port" means telling the firewall to let inbound connections to that number throu
   locked yourself out of your own machine, or opened everything).
 - **UFW (Uncomplicated Firewall)** — a friendly wrapper around iptables/nftables, standard on
   Debian-based systems including Parrot OS. Instead of raw iptables syntax, you write
-  `ufw allow 22/tcp`. This is what Doctor Raven will build on — never raw iptables/nftables.
+  `ufw allow 22/tcp`. This is what Doctor Raven builds on — never raw iptables/nftables.
 
-Doctor Raven already does one thing with UFW today, and it's read-only: `raven sec posture`
-shells out to `ufw status` and reports back "active" or "inactive." It changes nothing.
+`raven sec posture` still does its own separate, lightweight, non-sudo check (`ufw status`,
+reporting "active"/"inactive"/"needs root") as part of the general posture snapshot — that one
+stays read-only and best-effort so it's safe to run from anywhere, unprivileged. The `raven fw`
+group below is the actual management surface, and does use sudo (see section 4).
 
-## 2. What Doctor Raven will actually do (planned)
+## 2. What Doctor Raven actually does
 
-A new `raven fw` command group, built entirely on top of UFW:
+The `raven fw` command group, built entirely on top of UFW:
 
 | Command | What it does | Mutates anything? |
 |---|---|---|
@@ -68,8 +70,8 @@ Every mutating command follows the same two-step shape already used elsewhere in
    ```
 2. **Execute only on explicit yes.** Nothing runs on a default/empty answer.
 
-Nothing here ever runs automatically. The background daemon (`raven daemon`) will keep doing
-its existing read-only posture check on its normal schedule, but it will **never** call
+Nothing here ever runs automatically. The background daemon (`raven daemon`) keeps doing
+its existing read-only posture check on its normal schedule, but it **never** calls
 `allow`/`deny`/`delete`/`enable`/`disable` on its own. Firewall rule changes are a human-only,
 one-command-at-a-time action — same principle as the daemon's git auto-commit sweep, which
 commits automatically but is hard-coded to never push.
@@ -82,8 +84,9 @@ drops — permanently, until someone has physical access to the machine.
 
 So before `fw enable`, and before any `fw deny` targeting port 22/tcp, Doctor Raven checks
 whether SSH is currently allowed. If it isn't, a plain `y` isn't enough — it shows a loud
-warning and requires typing the port number back to proceed, so a half-asleep confirm can't
-strand you.
+warning and requires typing the word `confirm` to proceed, so a half-asleep tap of `y` can't
+strand you. `fw disable` always shows this stronger warning too, since it drops all filtering
+at once, not just one rule.
 
 ## 3. How this actually protects your PC
 
@@ -108,6 +111,8 @@ Concretely, once in place:
 
 - No raw iptables/nftables — UFW only, to keep the rule syntax simple and hard to misconfigure.
 - No automatic rule changes by the daemon, ever.
-- No silent `sudo` — every privileged call is a rule the user explicitly confirmed, matching
-  how `raven maintain --apply` and `raven doctor` already handle `sudo apt-get`.
+- No silent `sudo` — every mutating `fw` call is a rule the user explicitly confirmed first,
+  matching how `raven maintain --apply` and `raven doctor` already handle `sudo apt-get`. (`fw
+  status` also uses sudo, since reading live ufw rules requires root either way — but it asks
+  nothing and changes nothing, so there's no confirmation gate for it.)
 - No claim of virus/malware detection — a firewall filters connections, nothing more.

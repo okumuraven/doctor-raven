@@ -10,7 +10,8 @@ A local-first intelligent assistant for daily work as a software engineer and cy
 - `raven research add/list` — topics you want Doctor Raven to brainstorm/research on each morning.
 - `raven ask "<question>" [--deep]` — ask the LLM directly. Local model by default; `--deep` forces the Claude API.
 - `raven maintain [--apply] [--no-scan]` — reports upgradable apt packages and runs rkhunter/lynis/clamscan. Never applies upgrades without an explicit `--apply` flag *and* an interactive confirmation.
-- `raven doctor` — checks for missing dependencies (Ollama, rkhunter, lynis, clamav, notify-send) and offers to install each one individually, with your confirmation before anything is installed.
+- `raven doctor` — checks for missing dependencies (Ollama, rkhunter, lynis, clamav, notify-send, ufw) and offers to install each one individually, with your confirmation before anything is installed.
+- `raven fw status/allow/deny/delete/enable/disable` — ufw-backed firewall management. Every rule change previews the exact command first and requires confirmation (`y/N`, or typing `confirm` for changes that risk locking you out of SSH) before it runs. See [Firewall.md](Firewall.md) for the full explanation.
 
 ## Architecture
 

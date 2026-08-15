@@ -7,7 +7,7 @@ import typer
 
 from doctor_raven.config import load_config
 from doctor_raven.core import llm_router
-from doctor_raven.features import briefing, git_ops, maintenance, reminders, research, schedule, security, system_health
+from doctor_raven.features import briefing, firewall, git_ops, launcher, maintenance, reminders, research, schedule, security, system_health, voice
 from doctor_raven.features import daemon as daemon_feature
 from doctor_raven.util.formatting import console, print_error, print_ok, print_section, print_warn
 
@@ -18,11 +18,15 @@ research_app = typer.Typer(help="Manage research topics")
 sec_app = typer.Typer(help="Security posture checks and CVE lookups")
 git_app = typer.Typer(help="Git convenience commands with a hard secrets gate — never force-pushes")
 git_auto_app = typer.Typer(help="Per-project opt-in for the daemon's automatic local-commit sweep")
+fw_app = typer.Typer(help="Manage the local firewall (ufw-backed). Every rule change is previewed and confirmed before it runs.")
+open_app = typer.Typer(help="Open apps/folders directly — no LLM involved, instant and unambiguous")
 app.add_typer(task_app, name="task")
 app.add_typer(remind_app, name="remind")
 app.add_typer(research_app, name="research")
 app.add_typer(sec_app, name="sec")
 app.add_typer(git_app, name="git")
+app.add_typer(fw_app, name="fw")
+app.add_typer(open_app, name="open")
 git_app.add_typer(git_auto_app, name="auto")
 
 
@@ -575,6 +579,273 @@ def sec_scan_deps(path: str) -> None:
     print_warn(f"{len(vulnerable)} package(s) with known vulnerabilities:")
     for finding in vulnerable:
         console.print(f"    {finding.name}=={finding.version}: {', '.join(finding.vuln_ids)}", markup=False)
+
+
+def _apply_previewed_change(change) -> None:
+    """Every fw mutation goes through here: show exactly what will run, and — if the change
+    carries a lockout risk (SSH deny, enabling ufw with SSH not yet allowed) — require typing
+    'confirm' rather than a plain y/N, so a reflexive yes can't strand a remote session."""
+    console.print(change.description, markup=False)
+    if change.warning:
+        print_warn(change.warning)
+        typed = typer.prompt("Type 'confirm' to proceed anyway, or anything else to cancel")
+        if typed.strip().lower() != "confirm":
+            console.print("Cancelled.")
+            raise typer.Exit(0)
+    elif not typer.confirm("Proceed?"):
+        console.print("Cancelled.")
+        raise typer.Exit(0)
+
+    result = change.apply()
+    if result.returncode == 0:
+        print_ok("Done.")
+    else:
+        print_error((result.stderr or result.stdout or "ufw command failed").strip())
+        raise typer.Exit(1)
+
+
+@fw_app.command("status")
+def fw_status() -> None:
+    """Read-only: list current firewall rules and whether ufw is active. Requires sudo since
+    ufw needs root to read live rules — you'll be prompted for your password if needed."""
+    try:
+        current = firewall.status()
+    except firewall.UFWUnavailable as exc:
+        print_error(str(exc))
+        raise typer.Exit(1)
+
+    console.print(f"Firewall: {'ACTIVE' if current.active else 'INACTIVE'}", markup=False)
+    if not current.rules:
+        console.print("  No rules configured.")
+        return
+    for rule in current.rules:
+        console.print(f"  [{rule.number}] {rule.port}  {rule.action} {rule.direction.upper()}  from {rule.source}", markup=False)
+
+
+@fw_app.command("allow")
+def fw_allow(
+    port: int,
+    proto: str = typer.Option("tcp", "--proto", help="tcp or udp"),
+    source: str = typer.Option(None, "--from", help="Restrict to this source IP/CIDR"),
+) -> None:
+    """Open a port. Always previews the exact ufw command and asks for confirmation first."""
+    try:
+        change = firewall.preview_allow(port, proto, source)
+    except firewall.InvalidRule as exc:
+        print_error(str(exc))
+        raise typer.Exit(1)
+    _apply_previewed_change(change)
+
+
+@fw_app.command("deny")
+def fw_deny(
+    port: int,
+    proto: str = typer.Option("tcp", "--proto", help="tcp or udp"),
+    source: str = typer.Option(None, "--from", help="Restrict to this source IP/CIDR"),
+) -> None:
+    """Block a port. Always previews the exact ufw command and asks for confirmation first."""
+    try:
+        change = firewall.preview_deny(port, proto, source)
+    except firewall.InvalidRule as exc:
+        print_error(str(exc))
+        raise typer.Exit(1)
+    _apply_previewed_change(change)
+
+
+@fw_app.command("delete")
+def fw_delete(rule_number: int) -> None:
+    """Remove a specific rule by the number shown in `raven fw status`."""
+    _apply_previewed_change(firewall.preview_delete(rule_number))
+
+
+@fw_app.command("enable")
+def fw_enable() -> None:
+    """Turn the firewall on. Warns loudly (and requires typing 'confirm') if SSH isn't allowed yet."""
+    try:
+        change = firewall.preview_enable()
+    except firewall.UFWUnavailable as exc:
+        print_error(str(exc))
+        raise typer.Exit(1)
+    _apply_previewed_change(change)
+
+
+@fw_app.command("disable")
+def fw_disable() -> None:
+    """Turn the firewall off entirely — drops all filtering, not just one rule."""
+    _apply_previewed_change(firewall.preview_disable())
+
+
+@open_app.command("code")
+def open_code(path: str = typer.Argument(None, help="Folder to open (defaults to current directory)")) -> None:
+    """Open VS Code at a folder."""
+    try:
+        print_ok(launcher.open_vscode(path))
+    except launcher.SkillError as exc:
+        print_error(str(exc))
+        raise typer.Exit(1)
+
+
+@open_app.command("terminal")
+def open_terminal_cmd(path: str = typer.Argument(None, help="Directory to open the terminal in")) -> None:
+    """Open a terminal (respects `[launcher] terminal_command` in config.toml, or auto-detects)."""
+    config = load_config()
+    try:
+        print_ok(launcher.open_terminal(path, config.terminal_command))
+    except launcher.SkillError as exc:
+        print_error(str(exc))
+        raise typer.Exit(1)
+
+
+@open_app.command("browser")
+def open_browser_cmd(url: str) -> None:
+    """Open the browser to a URL."""
+    try:
+        print_ok(launcher.open_browser(url))
+    except launcher.SkillError as exc:
+        print_error(str(exc))
+        raise typer.Exit(1)
+
+
+@app.command()
+def search(query: str) -> None:
+    """Web search — opens the results in your browser."""
+    config = load_config()
+    try:
+        print_ok(launcher.web_search(query, config))
+    except launcher.SkillError as exc:
+        print_error(str(exc))
+        raise typer.Exit(1)
+
+
+def _review_and_send_email(drafted) -> None:
+    print_section("Drafted email")
+    console.print(f"  To: {drafted.to}", markup=False)
+    console.print(f"  Subject: {drafted.subject}", markup=False)
+    console.print(f"\n{drafted.body}\n", markup=False)
+    if not typer.confirm("Open this in your mail client to send?"):
+        console.print("Discarded — nothing sent, nothing opened.")
+        return
+    if launcher.open_in_mail_client(drafted):
+        print_ok("Opened in your mail client. Hit send there when you're ready.")
+    else:
+        print_warn("Couldn't open a mail client automatically — here's the draft to copy:")
+        console.print(f"\nTo: {drafted.to}\nSubject: {drafted.subject}\n\n{drafted.body}\n", markup=False)
+
+
+@app.command()
+def email(to: str, about: str) -> None:
+    """Draft an email via the local LLM and review it before it goes anywhere. Doctor Raven
+    never sends mail itself — this only hands a reviewed draft to your own mail client."""
+    config = load_config()
+    if not _guard_or_confirm(config, "drafting this email"):
+        console.print("Skipped.")
+        raise typer.Exit(0)
+    drafted = launcher.draft(to, about, config)
+    _review_and_send_email(drafted)
+
+
+@app.command()
+def do(request: str) -> None:
+    """Natural-language entry point: tell Doctor Raven what to do in plain English and it
+    routes to one of a fixed set of known actions (open VS Code/terminal/browser, web search,
+    draft an email) — never a freeform decision. Says so plainly if nothing confidently matches."""
+    config = load_config()
+    if not _guard_or_confirm(config, "interpreting this request"):
+        console.print("Skipped.")
+        raise typer.Exit(0)
+
+    classified = launcher.interpret(request, config)
+    if not classified:
+        print_warn(
+            "Couldn't confidently match that to something I know how to do. "
+            "Try: open vscode, open terminal, open browser, search, or email."
+        )
+        raise typer.Exit(1)
+
+    try:
+        result = launcher.dispatch(classified["skill"], classified["params"], config)
+    except launcher.SkillError as exc:
+        print_error(str(exc))
+        raise typer.Exit(1)
+
+    if result.email_draft:
+        _review_and_send_email(result.email_draft)
+    else:
+        print_ok(result.message)
+
+
+def _speak_safely(text: str, config) -> None:
+    try:
+        voice.speak(text, config)
+    except voice.SpeechError as exc:
+        print_warn(f"Couldn't speak the response: {exc}")
+
+
+@app.command()
+def listen() -> None:
+    """Push-to-talk: Enter to start speaking, Enter again to stop. Transcribes locally with
+    faster-whisper, routes through the same fixed-skill dispatcher as `raven do`, and speaks
+    the result back via Piper (toggle with `[voice] speak_responses` in config.toml)."""
+    config = load_config()
+    if not _guard_or_confirm(config, "listening and transcribing"):
+        console.print("Skipped.")
+        raise typer.Exit(0)
+
+    console.print("Press Enter to start speaking...")
+    input()
+    try:
+        recording = voice.start(config.voice_max_recording_seconds)
+    except voice.RecorderError as exc:
+        print_error(str(exc))
+        raise typer.Exit(1)
+
+    console.print(f"Listening (up to {config.voice_max_recording_seconds:.0f}s) — press Enter when done.")
+    input()
+    try:
+        wav_path = voice.stop(recording)
+    except voice.RecorderError as exc:
+        print_error(str(exc))
+        raise typer.Exit(1)
+
+    try:
+        text = voice.transcribe(wav_path, config)
+    except voice.TranscriptionError as exc:
+        print_error(str(exc))
+        raise typer.Exit(1)
+    finally:
+        wav_path.unlink(missing_ok=True)
+
+    if not text:
+        print_warn("Didn't catch anything.")
+        raise typer.Exit(1)
+
+    console.print(f'You said: "{text}"', markup=False)
+
+    classified = launcher.interpret(text, config)
+    if not classified:
+        message = "Couldn't confidently match that to something I know how to do."
+        print_warn(message)
+        if config.voice_speak_responses:
+            _speak_safely(message, config)
+        raise typer.Exit(1)
+
+    try:
+        result = launcher.dispatch(classified["skill"], classified["params"], config)
+    except launcher.SkillError as exc:
+        print_error(str(exc))
+        if config.voice_speak_responses:
+            _speak_safely(str(exc), config)
+        raise typer.Exit(1)
+
+    if result.email_draft:
+        _review_and_send_email(result.email_draft)
+        spoken = "Drafted an email for your review."
+    else:
+        print_ok(result.message)
+        spoken = result.message
+
+    if config.voice_speak_responses:
+        _speak_safely(spoken, config)
 
 
 if __name__ == "__main__":

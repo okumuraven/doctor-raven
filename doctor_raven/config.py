@@ -38,6 +38,17 @@ dependency_scan_interval_hours = 6
 
 [git_auto]
 idle_minutes = 10
+
+[launcher]
+search_engine_url = "https://duckduckgo.com/?q="
+terminal_command = ""
+
+[voice]
+stt_model = "tiny.en"
+tts_voice = "en_US-lessac-medium"
+speak_responses = true
+cpu_threads = 0
+max_recording_seconds = 60
 """
 
 
@@ -58,6 +69,13 @@ class Config:
     daemon_tick_seconds: float
     daemon_dependency_scan_interval_hours: float
     git_auto_idle_minutes: float
+    search_engine_url: str
+    terminal_command: str
+    voice_stt_model: str
+    voice_tts_voice: str
+    voice_speak_responses: bool
+    voice_cpu_threads: int
+    voice_max_recording_seconds: float
 
 
 def _ensure_config_file() -> None:
@@ -79,6 +97,8 @@ def load_config() -> Config:
     user = raw.get("user", {})
     daemon = raw.get("daemon", {})
     git_auto = raw.get("git_auto", {})
+    launcher = raw.get("launcher", {})
+    voice = raw.get("voice", {})
 
     return Config(
         ollama_host=llm.get("ollama_host", "http://localhost:11434"),
@@ -96,6 +116,13 @@ def load_config() -> Config:
         daemon_tick_seconds=float(daemon.get("tick_seconds", 30)),
         daemon_dependency_scan_interval_hours=float(daemon.get("dependency_scan_interval_hours", 6)),
         git_auto_idle_minutes=float(git_auto.get("idle_minutes", 10)),
+        search_engine_url=launcher.get("search_engine_url", "https://duckduckgo.com/?q="),
+        terminal_command=launcher.get("terminal_command", ""),
+        voice_stt_model=voice.get("stt_model", "tiny.en"),
+        voice_tts_voice=voice.get("tts_voice", "en_US-lessac-medium"),
+        voice_speak_responses=bool(voice.get("speak_responses", True)),
+        voice_cpu_threads=int(voice.get("cpu_threads", 0)),
+        voice_max_recording_seconds=float(voice.get("max_recording_seconds", 60)),
     )
 
 

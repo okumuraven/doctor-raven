@@ -13,6 +13,7 @@ APT_PACKAGES = {
     "clamscan": "clamav",
     "freshclam": "clamav-freshclam",
     "notify-send": "libnotify-bin",
+    "ufw": "ufw",
 }
 
 OLLAMA_INSTALL_SCRIPT_URL = "https://ollama.com/install.sh"

@@ -1,2 +1,0 @@
-[console_scripts]
-raven = doctor_raven.cli:app

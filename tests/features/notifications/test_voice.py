@@ -43,3 +43,17 @@ def test_falls_back_when_phrasing_is_too_long(monkeypatch):
     monkeypatch.setattr(llm_router, "complete", lambda *a, **k: "x" * 300)
     result = voice_module.phrase_for_popup("The raw fact.", FakeConfig())
     assert result == "The raw fact."
+
+
+def test_forces_local_model(monkeypatch):
+    """Notification text (which can include CVE IDs, project/package names) must never leave
+    the machine via the default (Gemini) backend — this fires unattended from the daemon."""
+    captured = {}
+
+    def fake_complete(config, prompt, **kwargs):
+        captured["kwargs"] = kwargs
+        return "phrased fact."
+
+    monkeypatch.setattr(llm_router, "complete", fake_complete)
+    voice_module.phrase_for_popup("The fact.", FakeConfig())
+    assert captured["kwargs"].get("local") is True

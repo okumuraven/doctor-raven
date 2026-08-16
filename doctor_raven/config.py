@@ -15,6 +15,7 @@ DEFAULT_CONFIG = """\
 ollama_host = "http://localhost:11434"
 ollama_model = "llama3.2"
 claude_model = "claude-sonnet-5"
+gemini_model = "gemini-2.5-flash"
 
 [maintenance]
 auto_apply_updates = false
@@ -49,6 +50,10 @@ tts_voice = "en_US-lessac-medium"
 speak_responses = true
 cpu_threads = 0
 max_recording_seconds = 60
+
+[jobs]
+search_queries = "software engineer,web developer,frontend developer,full stack developer"
+sweep_interval_hours = 12
 """
 
 
@@ -57,8 +62,10 @@ class Config:
     ollama_host: str
     ollama_model: str
     claude_model: str
+    gemini_model: str
     auto_apply_updates: bool
     anthropic_api_key: str | None
+    gemini_api_keys: list[str]
     temp_warn_c: float
     temp_critical_c: float
     load_warn_per_core: float
@@ -76,6 +83,18 @@ class Config:
     voice_speak_responses: bool
     voice_cpu_threads: int
     voice_max_recording_seconds: float
+    jobs_search_queries: list[str]
+    jobs_sweep_interval_hours: float
+    discord_webhook_url: str | None
+
+
+def _load_gemini_api_keys() -> list[str]:
+    """GEMINI_API_KEYS (comma-separated) enables rotation across multiple keys/projects —
+    e.g. spreading requests across separate GCP projects to use each one's own quota pool
+    instead of exhausting a single key's rate limit. GEMINI_API_KEY (singular) still works
+    for a one-key setup."""
+    raw = os.environ.get("GEMINI_API_KEYS") or os.environ.get("GEMINI_API_KEY", "")
+    return [key.strip() for key in raw.split(",") if key.strip()]
 
 
 def _ensure_config_file() -> None:
@@ -99,13 +118,16 @@ def load_config() -> Config:
     git_auto = raw.get("git_auto", {})
     launcher = raw.get("launcher", {})
     voice = raw.get("voice", {})
+    jobs = raw.get("jobs", {})
 
     return Config(
         ollama_host=llm.get("ollama_host", "http://localhost:11434"),
         ollama_model=llm.get("ollama_model", "llama3.2"),
         claude_model=llm.get("claude_model", "claude-sonnet-5"),
+        gemini_model=llm.get("gemini_model", "gemini-2.5-flash"),
         auto_apply_updates=bool(maintenance.get("auto_apply_updates", False)),
         anthropic_api_key=os.environ.get("ANTHROPIC_API_KEY"),
+        gemini_api_keys=_load_gemini_api_keys(),
         temp_warn_c=float(system_health.get("temp_warn_c", 75)),
         temp_critical_c=float(system_health.get("temp_critical_c", 90)),
         load_warn_per_core=float(system_health.get("load_warn_per_core", 0.85)),
@@ -123,6 +145,13 @@ def load_config() -> Config:
         voice_speak_responses=bool(voice.get("speak_responses", True)),
         voice_cpu_threads=int(voice.get("cpu_threads", 0)),
         voice_max_recording_seconds=float(voice.get("max_recording_seconds", 60)),
+        jobs_search_queries=[
+            q.strip()
+            for q in jobs.get("search_queries", "software engineer,web developer,frontend developer,full stack developer").split(",")
+            if q.strip()
+        ],
+        jobs_sweep_interval_hours=float(jobs.get("sweep_interval_hours", 12)),
+        discord_webhook_url=os.environ.get("DISCORD_WEBHOOK_URL"),
     )
 
 

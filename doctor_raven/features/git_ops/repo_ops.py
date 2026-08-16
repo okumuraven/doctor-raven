@@ -66,11 +66,15 @@ def gitignore_status(cwd: Path | None = None) -> str | None:
 
 
 def draft_commit_message(config: Config, cwd: Path | None = None) -> str:
+    """Forces the local Ollama model regardless of Raven's configured default backend — this
+    fires from the daemon's unattended auto-commit sweep as well as the interactive `raven git
+    commit`, and diff content shouldn't leave the machine for either without you asking for it
+    some other way."""
     diff_text = _run(["git", "diff", "--cached"], cwd).stdout[:MAX_DIFF_PROMPT_CHARS]
     if not diff_text.strip():
         return ""
     try:
-        return llm_router.complete(config, diff_text, system=COMMIT_MESSAGE_SYSTEM_PROMPT).strip()
+        return llm_router.complete(config, diff_text, local=True, system=COMMIT_MESSAGE_SYSTEM_PROMPT).strip()
     except llm_router.NoLLMAvailable:
         return ""
 

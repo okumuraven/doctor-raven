@@ -190,3 +190,22 @@ def test_draft_commit_message_uses_llm_output(tmp_path, monkeypatch):
 
     monkeypatch.setattr(repo_ops.llm_router, "complete", lambda *a, **k: "feat: add app.py")
     assert repo_ops.draft_commit_message(FakeConfig()) == "feat: add app.py"
+
+
+def test_draft_commit_message_forces_local_model(tmp_path, monkeypatch):
+    """Diff content must never leave the machine via the default (Gemini) backend — this
+    fires from the daemon's unattended auto-commit sweep as well as manual commits."""
+    _init_repo(tmp_path)
+    (tmp_path / "app.py").write_text("x")
+    monkeypatch.chdir(tmp_path)
+    repo_ops.stage_all()
+
+    captured = {}
+
+    def fake_complete(config, prompt, **kwargs):
+        captured["kwargs"] = kwargs
+        return "feat: add app.py"
+
+    monkeypatch.setattr(repo_ops.llm_router, "complete", fake_complete)
+    repo_ops.draft_commit_message(FakeConfig())
+    assert captured["kwargs"].get("local") is True

@@ -78,6 +78,7 @@ def run_morning_briefing(config: Config, force: bool = False) -> None:
             for name, text in digest.topic_brainstorms.items():
                 console.print(f"  [bold]{escape(name)}[/bold]:")
                 console.print("    " + text.replace("\n", "\n    "), markup=False)
+            notifications.send_discord(config, research.format_digest_for_discord(digest))
 
     print_section("Maintenance status")
     try:

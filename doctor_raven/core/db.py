@@ -70,6 +70,14 @@ CREATE TABLE IF NOT EXISTS auto_commit_projects (
     project_path TEXT NOT NULL UNIQUE,
     enabled_at   TEXT NOT NULL DEFAULT (datetime('now'))
 );
+
+CREATE TABLE IF NOT EXISTS seen_jobs (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    url           TEXT NOT NULL UNIQUE,
+    title         TEXT NOT NULL,
+    company       TEXT NOT NULL,
+    first_seen_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
 """
 
 

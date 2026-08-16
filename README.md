@@ -1,6 +1,6 @@
 # Doctor Raven
 
-A local-first intelligent assistant for daily work as a software engineer and cybersecurity specialist on Parrot OS. CLI-first; no cloud dependency required for the basics.
+A local-first intelligent assistant for daily work as a software engineer and cybersecurity specialist on Parrot OS. CLI-first. Task/reminder/research storage, security scans, and firewall management are fully local with no cloud dependency; LLM-backed features (`ask`, research digest) default to the Gemini API for speed, and `--local` forces the fully-offline Ollama path instead.
 
 ## What it does
 
@@ -8,7 +8,7 @@ A local-first intelligent assistant for daily work as a software engineer and cy
 - `raven task add/list/done` — a local task list.
 - `raven remind add/list` — one-off reminders, delivered via `notify-send` when due.
 - `raven research add/list` — topics you want Doctor Raven to brainstorm/research on each morning.
-- `raven ask "<question>" [--deep]` — ask the LLM directly. Local model by default; `--deep` forces the Claude API.
+- `raven ask "<question>" [--local] [--deep]` — ask the LLM directly. Gemini by default; `--local` forces the on-device Ollama model instead (also gates on system health, since only this path burns local CPU); `--deep` forces the Claude API for a heavier answer.
 - `raven maintain [--apply] [--no-scan]` — reports upgradable apt packages and runs rkhunter/lynis/clamscan. Never applies upgrades without an explicit `--apply` flag *and* an interactive confirmation.
 - `raven doctor` — checks for missing dependencies (Ollama, rkhunter, lynis, clamav, notify-send, ufw) and offers to install each one individually, with your confirmation before anything is installed.
 - `raven fw status/allow/deny/delete/enable/disable` — ufw-backed firewall management. Every rule change previews the exact command first and requires confirmation (`y/N`, or typing `confirm` for changes that risk locking you out of SSH) before it runs. See [Firewall.md](Firewall.md) for the full explanation.
@@ -17,7 +17,8 @@ A local-first intelligent assistant for daily work as a software engineer and cy
 
 - Python, Typer CLI, SQLite for local storage (`~/.local/share/doctor-raven/raven.db`).
 - Feature-based modules under `doctor_raven/features/`: `schedule`, `reminders`, `research`, `maintenance`, `briefing`.
-- Hybrid LLM routing (`doctor_raven/core/llm_router.py`): local Ollama by default, Claude API for `--deep` requests or as an automatic fallback if Ollama is unreachable and `ANTHROPIC_API_KEY` is set.
+- Hybrid LLM routing (`doctor_raven/core/llm_router.py`): Gemini API by default (fast, creative), local Ollama via `--local` (or as an automatic fallback if Gemini isn't configured/unreachable), Claude API for `--deep` requests or as the final fallback if Ollama is also unreachable and `ANTHROPIC_API_KEY` is set. Two call sites always force the local Ollama path regardless of the default, since they fire unattended from the background daemon and shouldn't send data to a cloud API on their own timing: git auto-commit message drafting (`git_ops/repo_ops.py`) and desktop-notification phrasing (`notifications/voice.py`).
+- Gemini key rotation: `GEMINI_API_KEYS` accepts a comma-separated list (e.g. one key per GCP project, so each gets its own quota pool). The starting key round-robins across separate `raven` invocations (persisted to a small state file in the data dir, since almost every command is a short-lived process — an in-memory counter would just reset every time), and within a single call, if the chosen key fails for any reason, the rest are tried in turn before falling through to Ollama.
 - No `/frontend`/`/backend` split — this is a CLI/daemon tool with no web UI. No PostgreSQL/Docker — single-user local data fits SQLite with zero infra.
 
 ## Setup
@@ -30,7 +31,8 @@ This creates a venv at `~/.local/share/doctor-raven/venv`, installs the package,
 
 ### Environment variables
 
-- `ANTHROPIC_API_KEY` — optional. Needed for `--deep` requests and as the Ollama-unreachable fallback. Put it in `~/.config/doctor-raven/env` (chmod 600) so the systemd services can read it via `EnvironmentFile`.
+- `GEMINI_API_KEY` (single key) or `GEMINI_API_KEYS` (comma-separated, enables rotation across multiple keys/projects) — needed for the default (non-`--local`, non-`--deep`) LLM path. Without either, `ask`/research digest fall straight through to Ollama, then Claude, same as before this default existed. Put it in `~/.config/doctor-raven/env` (chmod 600) so the systemd services can read it via `EnvironmentFile`.
+- `ANTHROPIC_API_KEY` — optional. Needed for `--deep` requests and as the final fallback if both Gemini and Ollama are unavailable. Same `env` file as above.
 
 ### Local LLM (Ollama)
 

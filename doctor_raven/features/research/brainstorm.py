@@ -57,6 +57,29 @@ class DigestResult:
     topic_brainstorms: dict[str, str]
 
 
+def format_digest_for_discord(digest: "DigestResult") -> str:
+    """Plain text/Discord-markdown rendering of a digest — deliberately not the Rich-markup
+    version the terminal gets, since Discord's formatting rules differ. Truncation to Discord's
+    2000-char limit happens in discord_client, not here."""
+    lines = ["**Doctor Raven — Research Digest**"]
+
+    if digest.project_context:
+        top = digest.project_context[0]
+        lines.append(f"Currently on: **{top.name}** ({top.branch})")
+
+    lines.append("")
+    lines.append("**Synthesis**")
+    lines.append(digest.synthesis)
+
+    if digest.topic_brainstorms:
+        lines.append("")
+        lines.append("**Saved topics**")
+        for name, text in digest.topic_brainstorms.items():
+            lines.append(f"*{name}*: {text}")
+
+    return "\n".join(lines)
+
+
 def _format_projects(projects: list[ProjectActivity]) -> str:
     if not projects:
         return "(no recent git activity detected in the workspace)"

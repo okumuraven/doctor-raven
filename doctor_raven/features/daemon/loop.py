@@ -1,6 +1,7 @@
 """Persistent background loop: fires reminders near-real-time, notifies on system-health
 transitions, periodically scans tracked projects' dependency files for newly-appeared CVEs,
-and auto-commits (never pushes) any project you've explicitly opted in via `raven git auto enable`."""
+auto-commits (never pushes) any project you've explicitly opted in via `raven git auto enable`,
+and — once a resume is on file — periodically checks live job listings for new genuine matches."""
 
 import os
 import threading
@@ -8,7 +9,7 @@ import time
 from pathlib import Path
 
 from doctor_raven.config import Config
-from doctor_raven.features import git_ops, notifications, reminders, security, system_health
+from doctor_raven.features import git_ops, jobs, notifications, reminders, security, system_health
 from doctor_raven.features.daemon import pidlock, vuln_tracker
 from doctor_raven.features.research.project_tracker import list_recent_projects
 from doctor_raven.util.formatting import console, print_section
@@ -64,6 +65,34 @@ def _scan_project_dependencies(config: Config) -> None:
                 vuln_tracker.record_seen(project.name, new_pairs)
 
 
+def _sweep_jobs(config: Config) -> None:
+    resume_text = jobs.load_resume()
+    if not resume_text:
+        return  # no resume ingested yet — nothing to match listings against
+
+    listings = []
+    for term in config.jobs_search_queries:
+        try:
+            listings += jobs.remotive.fetch(term)
+        except jobs.remotive.JobSourceUnavailable:
+            continue
+    try:
+        listings += jobs.remoteok.fetch()
+    except jobs.remoteok.JobSourceUnavailable:
+        pass
+
+    matches = jobs.score(listings, resume_text, config)
+    new_matches = jobs.tracker.filter_new(matches)
+    if not new_matches:
+        return
+
+    summary = "; ".join(f"{m.listing.title} @ {m.listing.company}" for m in new_matches[:5])
+    notifications.notify_and_log(
+        f"Doctor Raven — {len(new_matches)} new job match(es)", summary, source="jobs", config=config
+    )
+    jobs.tracker.record_seen(new_matches)
+
+
 def _sweep_auto_commit_projects(config: Config) -> None:
     for project_path_str in git_ops.list_enabled():
         project_path = Path(project_path_str)
@@ -97,11 +126,17 @@ def run_daemon(config: Config) -> None:
         f"  Auto-commit: opted-in projects only, after {config.git_auto_idle_minutes:.0f}min idle "
         "(background thread, never pushes)"
     )
+    console.print(
+        f"  Job search: every {config.jobs_sweep_interval_hours:.1f}h, only once a resume is on file "
+        "(background thread)"
+    )
 
     last_health_level: str | None = None
     dependency_scan_interval = config.daemon_dependency_scan_interval_hours * 3600
+    jobs_sweep_interval = config.jobs_sweep_interval_hours * 3600
     scan_lock = threading.Lock()
     auto_commit_lock = threading.Lock()
+    jobs_lock = threading.Lock()
 
     def _start_scan_thread() -> None:
         def _worker() -> None:
@@ -121,10 +156,20 @@ def run_daemon(config: Config) -> None:
 
         threading.Thread(target=_worker, daemon=True).start()
 
+    def _start_jobs_thread() -> None:
+        def _worker() -> None:
+            try:
+                _sweep_jobs(config)
+            finally:
+                jobs_lock.release()
+
+        threading.Thread(target=_worker, daemon=True).start()
+
     try:
         if scan_lock.acquire(blocking=False):
             _start_scan_thread()
         last_dependency_scan = time.monotonic()
+        last_jobs_sweep = time.monotonic()
 
         while True:
             time.sleep(config.daemon_tick_seconds)
@@ -136,6 +181,12 @@ def run_daemon(config: Config) -> None:
                 if scan_lock.acquire(blocking=False):
                     _start_scan_thread()
                 # else: previous scan still running — skip this cycle's trigger
+
+            if time.monotonic() - last_jobs_sweep >= jobs_sweep_interval:
+                last_jobs_sweep = time.monotonic()
+                if jobs_lock.acquire(blocking=False):
+                    _start_jobs_thread()
+                # else: previous sweep still running — skip this cycle's trigger
 
             if auto_commit_lock.acquire(blocking=False):
                 _start_auto_commit_thread()

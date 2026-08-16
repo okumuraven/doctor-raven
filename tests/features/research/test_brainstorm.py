@@ -1,10 +1,12 @@
 from pathlib import Path
 
 from doctor_raven.features.research.brainstorm import (
+    DigestResult,
     _flag_unverified_cves,
     _format_kev,
     _format_projects,
     _format_stories,
+    format_digest_for_discord,
 )
 from doctor_raven.features.research.cyber_feed import KevEntry
 from doctor_raven.features.research.project_tracker import ProjectActivity
@@ -63,3 +65,31 @@ def test_format_kev_empty_says_so():
 def test_format_kev_includes_cve_id():
     entry = KevEntry(cve_id="CVE-2026-1111", vendor="Acme", product="Widget", name="RCE", date_added="2026-08-14")
     assert "CVE-2026-1111" in _format_kev([entry])
+
+
+def test_format_digest_for_discord_includes_current_project_and_synthesis():
+    project = ProjectActivity(
+        name="doctor-raven", path=Path("/x"), last_commit_at="2026-08-15T00:00:00", last_commit_message="fix bug", branch="main"
+    )
+    digest = DigestResult(
+        project_context=[project], tech_stories=[], kev_entries=[], synthesis="Nothing urgent today.", topic_brainstorms={}
+    )
+    result = format_digest_for_discord(digest)
+    assert "doctor-raven" in result
+    assert "main" in result
+    assert "Nothing urgent today." in result
+
+
+def test_format_digest_for_discord_includes_topic_brainstorms():
+    digest = DigestResult(
+        project_context=[], tech_stories=[], kev_entries=[], synthesis="synthesis text", topic_brainstorms={"rust": "idea 1"}
+    )
+    result = format_digest_for_discord(digest)
+    assert "rust" in result
+    assert "idea 1" in result
+
+
+def test_format_digest_for_discord_handles_empty_digest():
+    digest = DigestResult(project_context=[], tech_stories=[], kev_entries=[], synthesis="", topic_brainstorms={})
+    result = format_digest_for_discord(digest)
+    assert "Doctor Raven — Research Digest" in result

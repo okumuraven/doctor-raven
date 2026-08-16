@@ -27,8 +27,11 @@ def _is_trustworthy(raw_message: str, phrased: str) -> bool:
 
 
 def phrase_for_popup(raw_message: str, config: Config) -> str:
+    """Forces the local Ollama model — this fires from the daemon on every reminder/health/CVE
+    event, unattended, and notification text (which can include CVE IDs, project or package
+    names) shouldn't leave the machine on its own timing."""
     try:
-        phrased = llm_router.complete(config, raw_message, system=VOICE_SYSTEM_PROMPT)
+        phrased = llm_router.complete(config, raw_message, local=True, system=VOICE_SYSTEM_PROMPT)
     except llm_router.NoLLMAvailable:
         return raw_message
 

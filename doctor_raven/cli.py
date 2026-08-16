@@ -6,7 +6,7 @@ import typer
 
 from doctor_raven.config import load_config
 from doctor_raven.core import llm_router
-from doctor_raven.features import briefing, firewall, git_ops, launcher, maintenance, reminders, research, schedule, security, system_health, voice
+from doctor_raven.features import briefing, firewall, git_ops, jobs, launcher, maintenance, notifications, reminders, research, schedule, security, system_health, voice
 from doctor_raven.features import daemon as daemon_feature
 from doctor_raven.util.formatting import console, print_error, print_ok, print_section, print_warn
 
@@ -19,6 +19,7 @@ git_app = typer.Typer(help="Git convenience commands with a hard secrets gate �
 git_auto_app = typer.Typer(help="Per-project opt-in for the daemon's automatic local-commit sweep")
 fw_app = typer.Typer(help="Manage the local firewall (ufw-backed). Every rule change is previewed and confirmed before it runs.")
 open_app = typer.Typer(help="Open apps/folders directly — no LLM involved, instant and unambiguous")
+jobs_app = typer.Typer(help="Job search: matches live listings against your resume")
 app.add_typer(task_app, name="task")
 app.add_typer(remind_app, name="remind")
 app.add_typer(research_app, name="research")
@@ -26,6 +27,7 @@ app.add_typer(sec_app, name="sec")
 app.add_typer(git_app, name="git")
 app.add_typer(fw_app, name="fw")
 app.add_typer(open_app, name="open")
+app.add_typer(jobs_app, name="jobs")
 git_app.add_typer(git_auto_app, name="auto")
 
 
@@ -181,6 +183,8 @@ def research_digest(
             console.print(f"  [bold]{name}[/bold]:", markup=True)
             console.print("    " + text.replace("\n", "\n    "), markup=False)
 
+    notifications.send_discord(config, research.format_digest_for_discord(digest))
+
 
 def _guard_or_confirm(config, task_label: str) -> bool:
     """Warns + diagnoses the cause before a CPU-heavy task, then lets the caller decide."""
@@ -229,14 +233,22 @@ def health() -> None:
 @app.command()
 def ask(
     question: str,
-    deep: bool = typer.Option(False, "--deep", help="Use the Claude API instead of the local model"),
+    deep: bool = typer.Option(False, "--deep", help="Use the Claude API for a deeper answer"),
+    local: bool = typer.Option(False, "--local", help="Force the local Ollama model instead of the default Gemini"),
 ) -> None:
+    """Defaults to Gemini (fast, cloud). --local forces the on-device Ollama model instead —
+    only then does this touch local CPU, so only --local goes through the system-health guard.
+    --deep forces Claude for a heavier answer."""
+    if deep and local:
+        print_error("--deep and --local are mutually exclusive — pick one.")
+        raise typer.Exit(1)
+
     config = load_config()
-    if not deep and not _guard_or_confirm(config, "this local model request"):
+    if local and not _guard_or_confirm(config, "this local model request"):
         console.print("Skipped.")
         raise typer.Exit(0)
     try:
-        console.print(llm_router.complete(config, question, deep=deep), markup=False)
+        console.print(llm_router.complete(config, question, deep=deep, local=local), markup=False)
     except llm_router.NoLLMAvailable as exc:
         print_error(str(exc))
         raise typer.Exit(1)
@@ -857,6 +869,61 @@ def listen() -> None:
 
     if config.voice_speak_responses:
         _speak_safely(spoken, config)
+
+
+@jobs_app.command("resume")
+def jobs_resume(path: str) -> None:
+    """Ingest your resume (PDF or plain text) for matching against live job listings. Stays on
+    disk under Doctor Raven's own data dir — never uploaded anywhere."""
+    try:
+        text = jobs.ingest_resume(path)
+    except jobs.ResumeError as exc:
+        print_error(str(exc))
+        raise typer.Exit(1)
+    print_ok(f"Resume ingested ({len(text)} characters).")
+
+
+@jobs_app.command("search")
+def jobs_search(
+    query: str = typer.Option(None, "--query", help="Search term for Remotive (defaults to config's jobs_search_queries)"),
+) -> None:
+    """Pull live listings from Remotive + RemoteOK and show only genuine matches for your resume."""
+    config = load_config()
+    resume_text = jobs.load_resume()
+    if not resume_text:
+        print_error("No resume on file. Run `raven jobs resume <path>` first.")
+        raise typer.Exit(1)
+
+    if not _guard_or_confirm(config, "searching and matching jobs"):
+        console.print("Skipped.")
+        raise typer.Exit(0)
+
+    queries = [query] if query else config.jobs_search_queries
+    listings = []
+    for term in queries:
+        try:
+            listings += jobs.remotive.fetch(term)
+        except jobs.remotive.JobSourceUnavailable as exc:
+            print_warn(str(exc))
+    try:
+        listings += jobs.remoteok.fetch()
+    except jobs.remoteok.JobSourceUnavailable as exc:
+        print_warn(str(exc))
+
+    if not listings:
+        console.print("No listings fetched.")
+        return
+
+    matches = jobs.score(listings, resume_text, config)
+    if not matches:
+        console.print(f"Checked {len(listings)} listing(s) — nothing that's a genuine fit right now.")
+        return
+
+    print_section(f"{len(matches)} genuine match(es) out of {len(listings)} checked")
+    for match in matches:
+        console.print(f"  {match.listing.title} @ {match.listing.company} ({match.listing.source})", markup=False)
+        console.print(f"    {match.reason}", markup=False)
+        console.print(f"    {match.listing.url}", markup=False)
 
 
 if __name__ == "__main__":
